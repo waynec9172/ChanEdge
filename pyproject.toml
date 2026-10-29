@@ -1,0 +1,36 @@
+[project]
+name = "chanedge"
+version = "0.1.0"
+description = "ChanEdge paper-trading stack"
+requires-python = ">=3.12"
+# ccxt license check, 2026-10-29.
+# Opened https://github.com/ccxt/ccxt/blob/master/LICENSE.txt (repository file, not the GitHub badge).
+# That file is the MIT License, Copyright (c) 2024 Igor Kroitor.
+# Installed wheel ccxt 4.5.90 declares License-Expression: MIT in METADATA.
+dependencies = [
+    "pydantic>=2",
+    "PyYAML>=6",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "SQLAlchemy>=2",
+    "structlog>=24",
+    "ccxt>=4",
+    "typesafe-sdk",
+]
+
+[project.scripts]
+chanedge = "chanedge.app.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

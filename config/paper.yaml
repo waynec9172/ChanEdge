@@ -1,0 +1,5 @@
+# 只覆蓋這兩個葉節點。遞迴合併必須留下 runtime.venue 與其餘未出現的欄位。
+runtime:
+  mode: paper
+safety:
+  kill_switch: false

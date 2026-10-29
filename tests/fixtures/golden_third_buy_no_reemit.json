@@ -1,0 +1,12 @@
+{
+  "description": "Append 59, 57, 60, 63 to the 42-bar multi-zs series. Index 44 replaces the endpoint and does not emit a second third buy or a second buy. The index 41 signal keeps every field except related_bi_id.",
+  "min_bi_bars": 2,
+  "extension": [59, 57, 60, 63],
+  "checks": [
+    {"index": 41, "bias": "breakout_up", "active": "ZS2", "signal": "third_buy", "defending": 58},
+    {"index": 42, "bias": "breakout_up", "active": "ZS2", "signal": null},
+    {"index": 43, "bias": "breakout_up", "active": "ZS2", "signal": null},
+    {"index": 44, "bias": "breakout_up", "active": "ZS2", "signal": null},
+    {"index": 45, "bias": "breakout_up", "active": "ZS2", "signal": null}
+  ]
+}

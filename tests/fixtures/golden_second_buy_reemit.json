@@ -1,0 +1,5 @@
+{
+  "description": "L0 is 30, the old L1 is 34, and the new L1 is 33. First 14 closes of golden_zs_zd_frozen, indexes 0 through 13, last price 36.",
+  "min_bi_bars": 2,
+  "prices": [50, 60, 50, 40, 30, 37, 44, 50, 44, 38, 34, 37, 33, 36]
+}

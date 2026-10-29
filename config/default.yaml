@@ -1,0 +1,123 @@
+runtime:
+  mode: paper                 # paper | live
+  venue: binanceusdm
+  product: usdt_perp
+  decision_timeframe: 15m
+universe:
+  mode: top_quote_volume      # 紙交易預設。測試用 pin
+  size: 20
+  quote: USDT
+  metric: quote_volume        # 已收盤日 K 的 quote_volume，不是 ticker 的 quoteVolume
+  bar: 1d                     # 檔名日期 D 用 open_time = (D-1) 00:00 UTC 的那根
+  refresh: daily_utc
+  refresh_minute: 5
+  exclude_bases: [USDC, FDUSD, TUSD, USDP, DAI, USD1, EUR]
+  # pin:                      # 只在 mode=pin 時使用，不進 config_hash
+  #   - { symbol: BTC/USDT, venue_symbol: BTC/USDT:USDT }
+safety:
+  kill_switch: true           # true = 禁止加倉；reduce_only 仍可送
+marketdata:
+  history_start: "2024-01-01"
+  windows: { "15m": 1500, "1h": 1000, "4h": 500 }
+  max_gap_bars: { "15m": 1, "1h": 1, "4h": 1 }
+  stale_grace_seconds: 90
+  close_wait_seconds: 3      # 只給紙交易。收盤後再等這麼多秒。不進 config_hash
+  closed_bars_only: true
+chanlun:
+  min_bi_bars: 5
+  zhongshu_min_bi: 3
+  segment_algo: minimal_break
+  segment_enabled: false      # 預設不算線段，熱路徑少一段
+  bias_uses_segment: false
+  engine: inhouse
+features:
+  atr_period: 14
+  volume_median_bars: 20
+  edge_band_atr: 0.8
+volatility:
+  atr_pct_min: 0.001          # 0.10%。成本過濾改由 risk.max_cost_r 負責
+  atr_pct_max: 0.030
+  min_samples: 200            # 信號前的 15m atr_pct 少於此數時 vol_tent = 0.5，不否決
+session:
+  multipliers: { asia: 0.85, europe: 0.95, overlap: 1.0, us: 0.95, late: 0.75 }
+  weekend_multiplier: 0.70
+  funding_hours_utc: [0, 8, 16]
+  funding_penalty_minutes: 15
+  funding_penalty: 0.15
+  hard_skip_buckets: []
+jev:
+  version: weighted-v1
+  weights:
+    structure: 0.24
+    location: 0.18
+    resonance: 0.18
+    volatility_volume: 0.14
+    signal_bar: 0.14
+    session: 0.12
+  enter_threshold: 0.62
+  hold_bias: 0.35
+  temperature: 1.0
+  channels:
+    structure:
+      weights: { overlap: 0.15, agree: 0.15, contained: 0.10, clarity: 0.30, clean: 0.30 }
+      overlap_peak: 0.35
+      overlap_width: 0.35
+      overlap_penalty_above: 0.85
+      overlap_penalty: 0.15
+      clarity_full_at: 0.60
+      clean_leave_full_atr: 0.80
+      reentry_factor: [1.0, 0.4, 0.0]   # 索引 = reentry 根數，超出用最後一項
+    location:
+      weights: { loc: 0.50, htf_pos: 0.30, room: 0.20 }
+      third_peak: 0.35
+      third_width: 0.80
+      second_peak: 0.50
+      second_width: 1.0
+      long_htf_peak: 0.25
+      short_htf_peak: 0.75
+      htf_width: 0.55
+      outside_range_score: 0.75
+      room_full_atr: 1.5
+      nearby_penalty_atr: 0.30
+      nearby_penalty: 0.20
+    resonance:
+      breakout_abs: 0.6
+      signal_tf_floor: 0.5
+    volatility_volume:
+      vol_weight: 0.6
+      volume_weight: 0.4
+      volume_floor: 0.6
+      volume_span: 1.4
+    signal_bar:
+      weights: { close_location: 0.45, body: 0.35, wick: 0.20 }
+      against_bar_factor: 0.5
+      doji_range_pct: 0.0008
+      doji_penalty: 0.15
+risk:
+  initial_equity_quote: 10000
+  risk_fraction: 0.005
+  max_notional_quote: 20000   # 單筆上限。有效單筆還要再 min 權益 × max_leverage
+  max_open_positions: 3
+  max_same_direction: 2
+  max_gross_notional_quote: 20000  # 有效合計是 min(這個數, 權益 × max_leverage)
+  max_leverage: 2
+  max_cost_r: 0.40            # round_trip / (stop_dist / entry_reference)。大於此值拒絕
+  stop_buffer_atr: 0.15
+  one_position_per_symbol: true
+  partials: [{ fraction: 0.5, mode: prior_swing, r_fallback: 1.5 }]
+  trail: { kind: structure_fenxing, arm_r: 1.0 }
+  # 最小下單量在 Instrument.min_qty，來自交易所 limits。不設全域 min_qty。
+execution:
+  fee_bps: 5.0
+  slippage_bps: 1.0
+  fill_model: next_open
+  order_type: market
+  position_mode: one_way       # Phase 1 固定。實盤前確認帳戶為單向；hedge 的 positionSide 不在本階段
+  margin_mode: isolated
+journal:
+  sqlite_path: data/chanedge.sqlite
+  parquet_root: data/bars
+monitor:
+  host: 127.0.0.1
+  port: 8765
+  bar_tail: 300

@@ -1,0 +1,25 @@
+{
+  "description": "ZG <= ZD drops the earliest bi and does not revive it when a later replacement would make the old trio overlap. Index 13 has no zhongshu and structure_bias up. No signal rows.",
+  "min_bi_bars": 2,
+  "prices": [15, 20, 17, 13, 10, 17, 24, 30, 28, 26, 25, 27, 18, 22, 24],
+  "at_11": {
+    "bis": [[1, 4], [4, 7], [7, 10]],
+    "ranges": [
+      {"high": 20, "low": 10, "end_price": 10, "direction": "down"},
+      {"high": 30, "low": 10, "end_price": 30, "direction": "up"},
+      {"high": 30, "low": 25, "end_price": 25, "direction": "down"}
+    ]
+  },
+  "at_12": {
+    "bis": [[1, 4], [4, 7], [7, 10]],
+    "fenxing": {"mid": 11, "price": 27, "mark": "top"}
+  },
+  "at_13": {
+    "bis": [[1, 4], [4, 7], [7, 12]],
+    "first_bi": {"high": 20, "low": 10, "end_price": 10, "direction": "down"},
+    "last_bi": {"high": 30, "low": 18, "end_price": 18, "direction": "down"},
+    "structure_bias": "up",
+    "close": 22,
+    "fenxing": {"mid": 11, "price": 27, "mark": "top"}
+  }
+}

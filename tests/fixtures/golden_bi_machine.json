@@ -1,0 +1,27 @@
+{
+  "description": "min_bi_bars=2 and no inclusion. Only two bis. Ignored fenxings stay in the snapshot. No structure_bias expectation and no signal rows.",
+  "min_bi_bars": 2,
+  "prices": [40, 25, 32, 18, 24, 22, 48, 40, 60, 50, 30, 36, 28, 34],
+  "bis": [
+    {
+      "start": 3,
+      "end": 8,
+      "direction": "up",
+      "start_price": 18,
+      "end_price": 60,
+      "high": 60,
+      "low": 18
+    },
+    {
+      "start": 8,
+      "end": 12,
+      "direction": "down",
+      "start_price": 60,
+      "end_price": 28,
+      "high": 60,
+      "low": 28
+    }
+  ],
+  "fenxing_mids": [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12],
+  "not_endpoints": [1, 2, 4, 5, 6, 7, 10, 11]
+}
