@@ -10,7 +10,6 @@ from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
-    Field,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -37,7 +36,11 @@ Money = Annotated[Decimal, BeforeValidator(_to_decimal)]
 
 
 def _require_sum_one(values: object, label: str) -> None:
-    total = sum((_to_decimal(item) for item in values), Decimal(0))
+    """Each weight >= 0 and the total is 1. No silent renormalisation."""
+    items = [_to_decimal(item) for item in values]
+    if any(item < 0 for item in items):
+        raise ValueError(f"{label} must each be >= 0")
+    total = sum(items, Decimal(0))
     if abs(total - Decimal(1)) > _WEIGHT_TOLERANCE:
         raise ValueError(f"{label} must sum to 1")
 
@@ -440,16 +443,16 @@ class MonitorSettings(BaseModel):
 
 
 class SystemOneSettings(BaseModel):
-    """Defaults keep config/default.yaml on the local scorer. enabled false omits the hash section."""
+    """Values live in config/default.yaml like every other default. enabled false omits the hash section."""
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = False
-    model_pin: str = "jev-1.14.0"
-    question_set: str = "entry-v1"
-    timeout_seconds: float = 1.5
-    cache_path: str = "data/jev/systemone.jsonl"
-    base_url: str = "https://api.typesafe.ai"
+    enabled: bool
+    model_pin: str
+    question_set: str
+    timeout_seconds: float
+    cache_path: str
+    base_url: str
 
     @field_validator("model_pin", "question_set", "cache_path")
     @classmethod
@@ -485,7 +488,7 @@ class Settings(BaseModel):
     volatility: VolatilitySettings
     session: SessionSettings
     jev: JevSettings
-    systemone: SystemOneSettings = Field(default_factory=SystemOneSettings)
+    systemone: SystemOneSettings
     risk: RiskSettings
     execution: ExecutionSettings
     journal: JournalSettings

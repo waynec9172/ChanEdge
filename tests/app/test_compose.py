@@ -859,3 +859,102 @@ def test_startup_target_and_universe_date_follow_the_close(tmp_path: Path) -> No
     assert startup_target(datetime(2024, 1, 1, 0, 15, 4, tzinfo=UTC), 3) == datetime(2024, 1, 1, 0, 30, tzinfo=UTC)
     assert universe_date(datetime(2024, 1, 1, 0, 4, tzinfo=UTC), 5) == YESTERDAY
     assert universe_date(datetime(2024, 1, 1, 0, 5, tzinfo=UTC), 5) == DAY
+
+
+def test_instruments_from_real_ccxt_markets_keep_only_the_usdt_perp() -> None:
+    import ccxt
+
+    from chanedge.app.compose import instruments_from_exchange
+
+    parser = ccxt.binanceusdm()
+
+    def fapi(symbol: str, quote: str, contract_type: str, delivery: int) -> dict:
+        return {
+            "symbol": symbol,
+            "pair": "BTC" + quote,
+            "contractType": contract_type,
+            "deliveryDate": delivery,
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "quoteAsset": quote,
+            "marginAsset": quote,
+            "pricePrecision": 2,
+            "quantityPrecision": 3,
+            "filters": [
+                {"filterType": "PRICE_FILTER", "minPrice": "556.80", "maxPrice": "4529764", "tickSize": "0.10"},
+                {"filterType": "LOT_SIZE", "stepSize": "0.001", "maxQty": "1000", "minQty": "0.001"},
+                {"filterType": "MIN_NOTIONAL", "notional": "100"},
+            ],
+        }
+
+    raw = (
+        fapi("BTCUSDT", "USDT", "PERPETUAL", 4133404800000),
+        fapi("BTCUSDT_251226", "USDT", "CURRENT_QUARTER", 1766736000000),
+        fapi("BTCUSDC", "USDC", "PERPETUAL", 4133404800000),
+    )
+    markets = {item["symbol"]: item for item in (parser.parse_market(entry) for entry in raw)}
+    assert all(item["limits"]["leverage"]["max"] is None for item in markets.values())
+
+    class _Markets:
+        def load_markets(self):
+            return markets
+
+    found = instruments_from_exchange(_Markets(), "binanceusdm", default_leverage=2)
+    assert set(found) == {"BTC/USDT"}
+    assert found["BTC/USDT"].venue_symbol == "BTC/USDT:USDT"
+    assert found["BTC/USDT"].leverage_max == 2
+    assert found["BTC/USDT"].price_tick == Decimal("0.1")
+
+
+def test_one_late_symbol_does_not_hold_back_the_others(tmp_path: Path) -> None:
+    clock = _Clock(T15 + timedelta(seconds=91))
+    app = _app(tmp_path, settings=_settings(("BTC/USDT", "ETH/USDT")), clock=clock)
+    app.listed = lambda: set()
+    app.instruments["BTC/USDT"] = _instrument("BTC/USDT")
+    app.instruments["ETH/USDT"] = _instrument("ETH/USDT")
+    late = [_candle("ETH/USDT", Timeframe.M15, OLD, low=99.5)]
+    _store(app, _pack("BTC/USDT") + late)
+    _arm(app, ScriptedEngine({("BTC/USDT", T15): _signal("BTC/USDT")}))
+    slept: list[float] = []
+    result = run_paper_bar(app, decision_time=T15, sleep=slept.append)
+    by_symbol = {item.symbol: item for item in result.decisions}
+    assert slept == [3]
+    assert result.stale is True
+    assert _codes(by_symbol["ETH/USDT"].hard_rule_json) == ["stale_data"]
+    assert by_symbol["BTC/USDT"].action == DecisionAction.ENTER_LONG.value
+
+
+def test_first_paper_fill_starts_at_the_window_before_now(tmp_path: Path) -> None:
+    from chanedge.marketdata.ccxt_adapter import PAGE_LIMIT
+
+    exchange = _Exchange()
+    seen: list[tuple[str, int, int]] = []
+
+    def fetch_ohlcv(_symbol, timeframe, since=None, limit=None):
+        seen.append((timeframe, since, limit))
+        if timeframe == "15m":
+            return [_ohlcv(T0)]
+        if timeframe == "1h":
+            return [_ohlcv(H1_OPEN)]
+        return [_ohlcv(H4_OPEN)]
+
+    exchange.fetch_ohlcv = fetch_ohlcv  # type: ignore[method-assign]
+    app = _app(tmp_path, exchange=exchange)
+    app.listed = lambda: {"BTC/USDT"}
+    app.instruments["BTC/USDT"] = _instrument("BTC/USDT")
+    run_paper_bar(app, decision_time=T15, sleep=lambda _seconds: None)
+    first = {timeframe: (since, limit) for timeframe, since, limit in reversed(seen)}
+    windows = app.settings.marketdata.windows
+    assert first["15m"] == (int((T15 - timedelta(minutes=15) * windows["15m"]).timestamp() * 1000), PAGE_LIMIT)
+    assert first["1h"][0] == int((T0 - timedelta(hours=1) * windows["1h"]).timestamp() * 1000)
+
+
+def test_backtest_warns_when_the_kill_switch_vetoes_every_entry(tmp_path: Path, capsys) -> None:
+    clock = _Clock(datetime(2024, 1, 2, 12, tzinfo=UTC))
+    base = ["backtest", "--config", str(ROOT / "config" / "default.yaml"), "--root", str(tmp_path), "--end", "2024-01-01"]
+    assert main(base, exchange=_Exchange(), clock=clock, environ=_Boom()) == 0
+    assert "safety.kill_switch is true" in capsys.readouterr().err
+    other = tmp_path / "with-overlay"
+    overlay = [*base[:4], str(other), *base[5:], "--overlay", str(ROOT / "config" / "paper.yaml")]
+    assert main(overlay, exchange=_Exchange(), clock=clock, environ=_Boom()) == 0
+    assert "kill_switch" not in capsys.readouterr().err

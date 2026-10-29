@@ -336,7 +336,11 @@ def test_long_version_strings_still_create_the_report(tmp_path: Path) -> None:
         versions=(ENGINE_VERSION, FEATURE_VERSION, MARKETDATA_VERSION),
     )
     assert len(result.run_id) > 255
-    assert "".join(result.directory.relative_to(sink.root).parts) == result.run_id
+    relative = result.directory.relative_to(sink.root)
+    assert len(relative.parts) == 1
+    assert len(relative.name) <= 96
+    assert relative.name.endswith(result.run_id[-41:])
+    assert json.loads((result.directory / "run.json").read_text(encoding="utf-8")) == {"run_id": result.run_id}
     assert (result.directory / "journal.sqlite").is_file()
     assert result.synchronous == 0
 
@@ -773,3 +777,57 @@ def _held(
         entry_decision_time=opened,
         entry_bar_open_time=opened,
     )
+
+
+def test_backtest_quality_vetoes_a_gapped_window(tmp_path: Path) -> None:
+    from chanedge.app.paper_loop import backtest_quality
+
+    symbol = "BTC/USDT"
+    early = T0 - timedelta(minutes=45)
+    bars = [
+        *_higher(symbol),
+        _candle(symbol, Timeframe.M15, early),
+        _candle(symbol, Timeframe.M15, T0, close=100.0, high=101.0, low=99.0),
+    ]
+    settings = load_settings(ROOT / "config" / "default.yaml")
+    result, _engine, _sink = _drive(
+        tmp_path / "reports",
+        bars,
+        {DAY: (_name(symbol, 1),)},
+        quality=backtest_quality(settings),
+    )
+    rules = json.loads(result.decisions[0].hard_rule_json or "{}")
+    assert "gap_data" in [veto["code"] for veto in rules["vetoes"]]
+    assert "stale_data" not in [veto["code"] for veto in rules["vetoes"]]
+
+
+def test_marks_use_the_last_close_when_the_decision_bar_is_missing() -> None:
+    from chanedge.backtest.loop import _marks, _Series
+
+    symbol = "BTC/USDT"
+    earlier = _candle(symbol, Timeframe.M15, T0 - timedelta(minutes=15), close=104.0, high=105.0)
+    marks = _marks({symbol: _Series([earlier])}, T15)
+    assert marks == {symbol: 104.0}
+
+
+def test_two_shadows_on_one_symbol_each_run_to_their_own_exit() -> None:
+    from chanedge.backtest.shadow import ShadowBook
+
+    symbol = "BTC/USDT"
+    book = ShadowBook()
+    plan = _held(symbol, entry=100.0, stop=95.0).plan
+    first = _signal(symbol, T15)
+    second = _signal(symbol, T15 + timedelta(minutes=15), SignalType.THIRD_BUY)
+    book.open_shadow(symbol, plan, first, T15)
+    book.match(symbol, _candle(symbol, Timeframe.M15, T15, low=99.0), fee_bps=ZERO, slippage_bps=ZERO)
+    later = T15 + timedelta(minutes=15)
+    book.open_shadow(symbol, plan.model_copy(update={"structure_stop_price": 90.0}), second, later)
+    book.match(symbol, _candle(symbol, Timeframe.M15, later, low=99.0), fee_bps=ZERO, slippage_bps=ZERO)
+    assert len(book.reviewable(symbol)) == 2
+    stop_bar = T15 + timedelta(minutes=30)
+    book.match(symbol, _candle(symbol, Timeframe.M15, stop_bar, open_=96.0, high=96.0, low=94.0, close=95.0), fee_bps=ZERO, slippage_bps=ZERO)
+    assert len(book.reviewable(symbol)) == 1
+    book.finish()
+    assert [row["signal_id"] for row in book.rows] == [first.id, second.id]
+    assert book.rows[0]["closed"] is True and book.rows[0]["exit_reason"] == "structure_stop"
+    assert book.rows[1]["unfinished"] is True

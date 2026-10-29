@@ -40,7 +40,7 @@
 ## id、路徑與榜單
 
 - `decision_id` 在 `domain/ids.py`。七個欄位先做成規範化 JSON 再雜湊，順序寫在實作計畫「三個版本字串」。不要把字串直接接起來。固定夾具是 `dec_ad70ba8d71d416fd`。三個版本字串很長，而且中間有 `|`。
-- 報告目錄是 `data/reports/{run_id}/`。`run_id` 含版本字串，單一路徑元件在 Windows 上不能超過 255 字元，所以實作要把長名字拆段。架構稿那句目錄句子仍然成立。
+- 報告目錄是 `data/reports/{run_id}/`。`run_id` 含版本字串，超過 800 字；SQLite 在 Linux／macOS 拒絕超過 512 位元組的路徑，所以長 `run_id` 用短目錄名（頭、雜湊、視窗與時間尾），完整 `run_id` 寫在目錄裡的 `run.json`。不要改回拆段。架構稿那句目錄句子仍然成立。
 - 今天的榜單檔已經存在，不論 `source`，都不覆寫。回測範圍缺檔則拒絕啟動，並指向 `universe --reconstruct`。不要用 `pin` 填歷史缺檔。`pin` 不跑 `download`、`universe`、`backtest`。
 - 重建只補尚不存在的日期。紙交易缺當天檔、而且沒有持倉：不開始。有持倉：只管理既有部位。
 - 對帳比的是 `decision_id` 集合。只含 `PIPELINE_TIMEOUT`、或含 `STALE_DATA` 的決策另列，不算策略分歧。沒有紙交易庫就不寫 `reconcile.json`。

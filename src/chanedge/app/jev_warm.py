@@ -10,13 +10,14 @@ from pathlib import Path
 from chanedge.app.paper_loop import (
     FileUniverse,
     ParquetBars,
+    backtest_quality,
     _kline_text,
     _symbols_in_files,
     _windows,
     inferred_instrument,
 )
 from chanedge.app.pipeline import PipelineServices
-from chanedge.backtest.loop import _bar_at, _decision_times, _preload, _quality, _universe_date, _window
+from chanedge.backtest.loop import _Series, _at, _decision_times, _preload, _quality, _universe_date, _windowed
 from chanedge.domain.canon import format_fixed8
 from chanedge.domain.enums import RuntimeMode, Timeframe
 from chanedge.domain.records import PipelineRequest
@@ -70,11 +71,14 @@ def run_jev_warm(app, *, vision_root: Path, end: date) -> int:
         instruments[symbol] = app.instruments.get(symbol) or inferred_instrument(settings, symbol, text)
     source = ParquetBars(app.store, settings.runtime.venue)
     store = {
-        timeframe: {symbol: tuple(source.load(symbol, timeframe)) for symbol in symbols}
+        timeframe: {symbol: _Series(source.load(symbol, timeframe)) for symbol in symbols}
         for timeframe in Timeframe
     }
     refresh = settings.universe.refresh_minute
-    times = _decision_times(store[Timeframe.M15], history, end, refresh)
+    times = _decision_times(
+        {symbol: series.bars for symbol, series in store[Timeframe.M15].items()}, history, end, refresh
+    )
+    quality = backtest_quality(settings)
     boards = _preload(FileUniverse(app.root, settings.runtime.venue), times, refresh)
     limits = _windows(settings)
     services = _warm_services(app.services)
@@ -92,9 +96,12 @@ def run_jev_warm(app, *, vision_root: Path, end: date) -> int:
         day = _universe_date(decision_time, refresh)
         board = boards[day]
         for symbol, rank in sorted(board.items(), key=lambda item: (item[1], item[0])):
-            bars_15 = store[Timeframe.M15].get(symbol, ())
-            if _bar_at(bars_15, decision_time) is None:
+            if _at(store[Timeframe.M15], symbol, decision_time) is None:
                 continue
+            request_bars = {
+                timeframe: _windowed(store[timeframe], symbol, decision_time, limits[timeframe])
+                for timeframe in Timeframe
+            }
             request = PipelineRequest(
                 symbol=symbol,
                 decision_time=decision_time,
@@ -103,11 +110,8 @@ def run_jev_warm(app, *, vision_root: Path, end: date) -> int:
                 group="entry",
                 full_log=False,
                 flattened=False,
-                bars={
-                    timeframe: _window(store[timeframe].get(symbol, ()), decision_time, limits[timeframe])
-                    for timeframe in Timeframe
-                },
-                data_quality=_quality(None, symbol, decision_time, bars_15),
+                bars=request_bars,
+                data_quality=_quality(quality, symbol, decision_time, request_bars),
                 instrument=instruments[symbol],
                 account=account,
                 safety=safety,

@@ -25,15 +25,23 @@ from chanedge.marketdata.vision import (
 )
 
 
+# Binance USDⓈ-M klines return at most 1500 rows per request.
+PAGE_LIMIT = 1500
+_MAX_PAGES = 1000
+
+
 def fetch_start(
     last_open: datetime | None,
     *,
     history_start: date,
     timeframe: Timeframe,
     window: int,
+    start_if_empty: datetime | None = None,
 ) -> datetime:
-    """No stored bar: warmup open. Otherwise the last open_time, inclusive."""
+    """No stored bar: start_if_empty, else the history_start warmup open. Otherwise the last open_time, inclusive."""
     if last_open is None:
+        if start_if_empty is not None:
+            return start_if_empty
         return warmup_open(history_start, timeframe, window)
     return last_open
 
@@ -64,8 +72,7 @@ class CcxtMarketData:
         start: datetime,
         end: datetime,
     ) -> tuple[StoredBar, ...]:
-        since = _millis(start)
-        rows = self._exchange.fetch_ohlcv(instrument.venue_symbol, timeframe.value, since, None)  # type: ignore[attr-defined]
+        rows = self._pages(instrument.venue_symbol, timeframe, start, end)
         stored: list[StoredBar] = []
         for row in rows:
             item = stored_bar_from_ohlcv(
@@ -81,6 +88,21 @@ class CcxtMarketData:
                 continue
             stored.append(item)
         return tuple(stored)
+
+    def _pages(self, venue_symbol: str, timeframe: Timeframe, start: datetime, end: datetime) -> list:
+        """Follow full pages forward until the window reaches end or the exchange stops advancing."""
+        since = _millis(start)
+        rows: list = []
+        for _page in range(_MAX_PAGES):
+            page = list(self._exchange.fetch_ohlcv(venue_symbol, timeframe.value, since, PAGE_LIMIT))  # type: ignore[attr-defined]
+            rows.extend(page)
+            if len(page) < PAGE_LIMIT:
+                break
+            last = _millis_cell(page[-1][0])
+            if last < since or utc_from_millis(last) + timeframe_duration(timeframe) >= end:
+                break
+            since = last + 1
+        return rows
 
     def fetch_daily_klines(
         self,
@@ -119,9 +141,16 @@ def sync_closed_bars(
     history_start: date,
     window: int,
     end: datetime,
+    start_if_empty: datetime | None = None,
 ) -> tuple[StoredBar, ...]:
     last = store.last_open_time(instrument.venue, instrument.symbol, timeframe)
-    start = fetch_start(last, history_start=history_start, timeframe=timeframe, window=window)
+    start = fetch_start(
+        last,
+        history_start=history_start,
+        timeframe=timeframe,
+        window=window,
+        start_if_empty=start_if_empty,
+    )
     stored = market.fetch_stored(instrument, timeframe, start, end)
     store.write_closed(instrument.venue, instrument.symbol, timeframe, stored)
     return stored
@@ -171,7 +200,7 @@ def paper_daily_quotes(
     by_compact = {quote.compact_symbol: quote for quote in quotes}
     selected: list[DailyQuote] = []
     for market in markets:
-        if not (market.get("swap") is True and market.get("linear") is True and market.get("settle") == "USDT"):
+        if not is_usdt_perp(market):
             continue
         base = market.get("base")
         if not isinstance(base, str) or market.get("quote") != "USDT":
@@ -196,8 +225,27 @@ def paper_daily_quotes(
     return tuple(selected)
 
 
-def instrument_from_market(market: Mapping[str, object], *, venue: str = "binanceusdm") -> Instrument:
-    """limits.amount.min, limits.cost.min, and precision ticks. Source is exchange."""
+def is_usdt_perp(market: Mapping[str, object]) -> bool:
+    """swap, linear, and both quote and settle USDT. Delivery and USDC contracts are not."""
+    return (
+        market.get("swap") is True
+        and market.get("linear") is True
+        and market.get("quote") == "USDT"
+        and market.get("settle") == "USDT"
+    )
+
+
+def instrument_from_market(
+    market: Mapping[str, object],
+    *,
+    venue: str = "binanceusdm",
+    default_leverage: int | None = None,
+) -> Instrument:
+    """limits.amount.min, limits.cost.min, and precision ticks. Source is exchange.
+
+    ccxt leaves limits.leverage.max empty for Binance markets until leverage
+    tiers are loaded. Sizing does not read it, so default_leverage fills it.
+    """
     base = market.get("base")
     if not isinstance(base, str) or base == "":
         raise ValueError("market base is required")
@@ -213,8 +261,10 @@ def instrument_from_market(market: Mapping[str, object], *, venue: str = "binanc
     precision = market.get("precision") if isinstance(market.get("precision"), Mapping) else {}
     assert isinstance(amount, Mapping) and isinstance(cost, Mapping)
     assert isinstance(leverage, Mapping) and isinstance(precision, Mapping)
-    leverage_max = leverage.get("max")
-    if isinstance(leverage_max, bool) or not isinstance(leverage_max, int) or leverage_max < 1:
+    leverage_max = _leverage(leverage.get("max"))
+    if leverage_max is None:
+        leverage_max = default_leverage
+    if leverage_max is None or leverage_max < 1:
         raise ValueError("market leverage max is required")
     settle = market.get("settle")
     margin = settle if isinstance(settle, str) and settle else "USDT"
@@ -232,6 +282,16 @@ def instrument_from_market(market: Mapping[str, object], *, venue: str = "binanc
         leverage_max=leverage_max,
         instrument_source=InstrumentSource.EXCHANGE,
     )
+
+
+def _leverage(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, float) and math.isfinite(value) and value >= 1 and value == int(value):
+        return int(value)
+    return None
 
 
 def _quote_cell(row: Sequence[object]) -> Decimal | None:

@@ -93,6 +93,13 @@ jev:
       against_bar_factor: 0.5
       doji_range_pct: 0.0008
       doji_penalty: 0.15
+systemone:
+  enabled: false              # 預設走本地 weighted-v1。打開前先跑 jev-warm，見 docs/agents/logic.md
+  model_pin: jev-1.14.0       # 版本 id，不送別名 jev-latest
+  question_set: entry-v1
+  timeout_seconds: 1.5        # 紙交易單次呼叫，不重試。不進 config_hash
+  cache_path: data/jev/systemone.jsonl
+  base_url: https://api.typesafe.ai
 risk:
   initial_equity_quote: 10000
   risk_fraction: 0.005

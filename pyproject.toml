@@ -15,7 +15,7 @@ dependencies = [
     "SQLAlchemy>=2",
     "structlog>=24",
     "ccxt>=4",
-    "typesafe-sdk",
+    "typesafe-sdk>=0.7.5,<0.8",
 ]
 
 [project.scripts]

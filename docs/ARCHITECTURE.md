@@ -365,7 +365,7 @@ ccxt `fetch_ohlcv` 的時間戳是 K 線開盤時間。正規化時：
 
 包含黃金樣本（PR-5，`open`／`close` 不參與合併）：`(low, high)` 依序為 `(10, 20)`、`(12, 18)`、`(19, 25)`、`(21, 24)`、`(22, 30)`、`(23, 28)`。第一對互不包含的是第二與第三根，`25 > 18`，初始方向 `UP`。前兩根先按 `UP` 併成 `[12, 20]`。其後第三根不包含它，且高低都更高，方向維持 `UP`。第四根 `(21, 24)` 被第三根包含，併入後為 `[21, 25]`。期望合併高低序列：`[12, 20]`、`[21, 25]`、`[23, 30]`。
 
-**分型。** 三根合併 K 線，中間高點嚴格高於左右為 `TOP`，中間低點嚴格低於左右為 `BOTTOM`。同一根合併 K 線若同時滿足頂與底，這根不產生分型。右根合併 K 線的最後一根原始 K 線尚未收盤，則 `confirmed=false`。信號、筆與 `structure_bias` 只用 `confirmed=true` 的分型。`k_index_mid` 是中間那根合併 K 線的 `raw_end`（右端原始索引），不是視窗序號。
+**分型。** 三根合併 K 線，中間高點嚴格高於左右為 `TOP`，中間低點嚴格低於左右為 `BOTTOM`。同一根合併 K 線若同時滿足頂與底，這根不產生分型。右根合併 K 線的最後一根原始 K 線尚未收盤，則 `confirmed=false`。信號、筆與 `structure_bias` 只用 `confirmed=true` 的分型。`k_index_mid` 是中間那根合併 K 線的 `raw_end`（右端原始索引），不是視窗序號。分型的確認棒是右根合併 K 線的**第一根**原始 K 線：`time` 是它的 `close_time`，`k_index_right` 是它的原始索引。其後被併進右根的包含 K 線不改確認棒，否則同一個信號會在每根包含 K 線上換一個 `time` 再成為候選。
 
 **筆。** 只對已確認分型、依 `k_index_mid` 由小到大跑下面這台狀態機。未確認分型不進入。Phase 1 不輸出未確認筆；`bis` 裡每一筆都已確立，`bi.confirmed` 恆為真。`min_bi_bars` 預設 5。這是本專案預設，不是 czsc 的預設；czsc 預設未核對，不准照抄。
 
@@ -1207,11 +1207,11 @@ class VetoCode(StrEnum):
 
 `Fenxing`：`id`、`timeframe`、`mark`、`index`、`time`、`price`、`bar_open_time`、`confirmed`、`k_index_left`、`k_index_mid`、`k_index_right`。
 
-`Bi`：`id`、`timeframe`、`direction`、`start_fx_id`、`end_fx_id`、`start_time`、`end_time`、`start_price`、`end_price`、`high`、`low`、`bar_count`、`confirmed`。
+`Bi`：`id`、`timeframe`、`direction`、`start_fx_id`、`end_fx_id`、`start_time`、`end_time`、`start_price`、`end_price`、`high`、`low`、`bar_count`、`confirmed`、`established_at`。`established_at` 是第一次確立這筆的分型確認時間；終點被取代時不變，用來分辨「這根新確認的筆」與「終點被取代的筆」。
 
 `Segment`：`id`、`timeframe`、`direction`、`start_bi_id`、`end_bi_id`、`start_time`、`end_time`、`high`、`low`、`bi_ids`、`confirmed`、`algo`（Phase 1 為 `minimal_break`）。
 
-`Zhongshu`：`id`、`timeframe`、`zg`、`zd`、`gg`、`dd`、`start_time`、`end_time`、`bi_ids`、`direction_into`、`level`、`confirmed`。
+`Zhongshu`：`id`、`timeframe`、`zg`、`zd`、`gg`、`dd`、`start_time`、`end_time`、`bi_ids`、`direction_into`、`level`、`confirmed`、`confirm_bar_open_time`。`confirm_bar_open_time` 是第三筆第一次確立那根右根的 `open_time`，回離從這根掃起，和 ZG／ZD 一起凍結。
 
 `ChanSignal`：`id`、`timeframe`、`type`、`status`、`time`、`price`、`direction`、`defending_fx_id`、`defending_price`、`related_zhongshu_id`、`related_bi_id`、`bar_open_time`、`prior_extreme`（二買的 L0 或二賣的 H0；三買可空）、`notes`。
 

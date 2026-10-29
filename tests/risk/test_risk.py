@@ -1602,3 +1602,19 @@ def end_tick() -> Fenxing:
 
 def bi_tick() -> Bi:
     return _bi("bi-tick", Direction.DOWN, "fx-tick", 100.5, high=101.0, low=99.0, end_time=T1)
+
+
+def test_ratchet_skips_a_bi_whose_endpoint_was_replaced_this_bar() -> None:
+    plan = _plan()
+    manager = RiskManager(_params())
+    armed = _position(plan, stop_price=plan.entry_reference)
+    lower = _fx("fx-lower", T3, 100.5, Mark.BOTTOM)
+    base = _bi("bi-down", Direction.DOWN, "fx-lower", 100.5, high=101.0, low=99.0, end_time=T2)
+    replaced = base.model_copy(update={"established_at": T2})
+    _assert_hold(
+        manager.review_open(_market(T3, (_calm(T2),), fenxings=(lower,), bis=(replaced,)), armed)
+    )
+    fresh = base.model_copy(update={"established_at": T3})
+    moved = manager.review_open(_market(T3, (_calm(T2),), fenxings=(lower,), bis=(fresh,)), armed)
+    assert moved.amend_stop is not None
+    assert moved.amend_stop.new_stop_price == pytest.approx(100.35)

@@ -184,7 +184,7 @@ def _ratchet(
 
 
 def _confirming_end(context: MultiTimeframeContext, direction: Direction) -> Decimal | None:
-    """Last bi whose end fenxing confirms on this decision bar. Ignored fenxings are not ends."""
+    """Last bi newly established on this decision bar. A replaced endpoint is not one."""
     snapshot = context.snapshots[Timeframe.M15]
     fenxings = {item.id: item for item in snapshot.fenxings}
     chosen: Decimal | None = None
@@ -193,6 +193,8 @@ def _confirming_end(context: MultiTimeframeContext, direction: Direction) -> Dec
             continue
         fenxing = fenxings.get(bi.end_fx_id)
         if fenxing is None or fenxing.time != context.decision_time:
+            continue
+        if bi.established_at is not None and bi.established_at != context.decision_time:
             continue
         chosen = _decimal(bi.end_price)
     return chosen

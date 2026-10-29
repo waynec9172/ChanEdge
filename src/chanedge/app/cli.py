@@ -16,6 +16,7 @@ from chanedge.app.compose import SystemClock, build_exchange, compose
 from chanedge.app.jev_warm import run_jev_warm, summarize_decisions
 from chanedge.app.paper_loop import (
     FileUniverse,
+    backtest_quality,
     ParquetBars,
     VisionFunding,
     download_history,
@@ -89,6 +90,12 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
                 day = universe_date(app.clock.now(), settings.universe.refresh_minute)
                 ensure_daily_file(app, day)
         elif args.command == "backtest":
+            if settings.safety.kill_switch:
+                print(
+                    "warning: safety.kill_switch is true, so every entry is vetoed and the report "
+                    "will have no trades. Pass --overlay config/paper.yaml to backtest entries.",
+                    file=sys.stderr,
+                )
             outcome = run_backtest_command(app, vision_root=vision, end=end)
             if outcome.incomplete:
                 return 3
@@ -161,6 +168,7 @@ def run_backtest_command(app, *, vision_root: Path, end: date):
         overlap_penalty_above=channel.overlap_penalty_above,
         jev_weights=weights,
         funding_source=VisionFunding(vision_root),
+        quality=backtest_quality(settings),
         windows=_windows(settings),
         full_log=False,
         halt_on=halt,

@@ -1,4 +1,8 @@
-"""Fenxing on merged bars. k_index_mid is the middle bar's raw_end."""
+"""Fenxing on merged bars. k_index_mid is the middle bar's raw_end.
+
+k_index_right and time come from the first raw bar of the right merged bar,
+so a later inside bar merged into it does not move the confirmation.
+"""
 
 from __future__ import annotations
 
@@ -58,7 +62,10 @@ def detect_fenxings(
         mark = Mark.TOP if is_top else Mark.BOTTOM
         price = mid.high if is_top else mid.low
         mid_bar = bars[mid.raw_end]
-        right_bar = bars[right.raw_end]
+        # The fenxing exists once the right merged bar's first raw bar closes.
+        # Inside bars merged into it later must not move the confirmation bar.
+        confirm_bar = bars[right.raw_start]
+        last_right_bar = bars[right.raw_end]
         found.append(
             DraftFenxing(
                 fenxing=Fenxing(
@@ -66,13 +73,13 @@ def detect_fenxings(
                     timeframe=timeframe,
                     mark=mark,
                     index=index,
-                    time=right_bar.close_time,
+                    time=confirm_bar.close_time,
                     price=price,
                     bar_open_time=mid_bar.open_time,
-                    confirmed=right_bar.is_closed,
+                    confirmed=last_right_bar.is_closed,
                     k_index_left=left.raw_end,
                     k_index_mid=mid.raw_end,
-                    k_index_right=right.raw_end,
+                    k_index_right=right.raw_start,
                 ),
                 raw_start=mid.raw_start,
             )

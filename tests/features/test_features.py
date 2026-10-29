@@ -919,3 +919,32 @@ def _vol_bars(count, *, high, low):
 def _session(params, open_time):
     bars = make_bars(1, origin=open_time)
     return _on_bar(params, bars, SignalType.SECOND_BUY, 99)
+
+
+def test_third_buy_leave_scans_from_the_frozen_confirm_bar(feature_params) -> None:
+    bars = make_ohlc(
+        [
+            (45, 200, 45, 45),
+            (55, 90, 55, 55),
+            (60, 80, 60, 60),
+            (58, 65, 58, 58),
+        ]
+    )
+    # The third bi's endpoint was later replaced, so its end fenxing now confirms on bar 2.
+    moved = make_fx("fx-moved", 1, 45, right=2)
+    moved_bi = make_bi("b2", Direction.DOWN, "fx-moved", 45, high=45, low=40, end_mid=1)
+    zone = make_zs("zs-frozen", zg=50, zd=40, gg=90, dd=40).model_copy(
+        update={"confirm_bar_open_time": bars[0].open_time}
+    )
+    third = make_signal("sig-third", SignalType.THIRD_BUY, bars[-1].close_time, 58, "fx-moved", related="zs-frozen", price=58)
+    snapshot = make_snapshot(
+        fenxings=(moved,),
+        bis=(moved_bi,),
+        zhongshus=(zone,),
+        signals=(third,),
+        active="zs-frozen",
+        as_of=bars[-1].close_time,
+        bar_count=4,
+    )
+    built = structure_channel(snapshot, bars, 3, third, 10, _structure(feature_params, clean=1))
+    assert built.breakout_leave_atr == pytest.approx(4)

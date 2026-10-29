@@ -7,11 +7,12 @@ not.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 from chanedge.domain.canon import format_fixed8, format_time_z
-from chanedge.domain.enums import OrderSide
+from chanedge.domain.enums import ExitReason, OrderSide
 from chanedge.domain.records import (
     BarCommit,
     BookFlush,
@@ -49,8 +50,19 @@ class JournalLedger:
         return tuple(loaded)
 
     def load_pending_orders(self) -> tuple[PendingOrder, ...]:
+        """Rebuild next_open orders. The plan and exit reason come from the decision row.
+
+        An entry whose decision row has no plan cannot be filled. It is marked
+        cancelled instead of crashing the first bar after every restart.
+        """
         pending: list[PendingOrder] = []
         for row in self.repo.load_pending_orders():
+            decision = self.repo.get_decision(row.decision_id)
+            plan = _decision_plan(decision)
+            exit_reason = _decision_exit_reason(decision) if row.reduce_only else None
+            if not row.reduce_only and (decision is None or plan is None or plan.rejected):
+                self.repo.set_order_status(row.client_order_id, "cancelled")
+                continue
             pending.append(
                 PendingOrder(
                     client_order_id=row.client_order_id,
@@ -60,9 +72,9 @@ class JournalLedger:
                     qty=row.qty,
                     reduce_only=row.reduce_only,
                     group_order=0,
-                    exit_reason=None,
-                    plan=None,
-                    entry_decision_time=None,
+                    exit_reason=exit_reason,
+                    plan=None if row.reduce_only else plan,
+                    entry_decision_time=None if row.reduce_only or decision is None else decision.decision_time,
                     submitted_at=row.submitted_at,
                 )
             )
@@ -91,17 +103,24 @@ class JournalLedger:
         self.repo.close()
 
 
-# A Windows path component cannot exceed 255 characters. The version
-# strings inside run_id are longer than that, so the directory is a chain
-# of segments that concatenate back to the run_id.
-_COMPONENT = 180
+# The full run_id is over 800 characters with the real version strings. SQLite's
+# unix VFS refuses database paths over 512 bytes, so a long run_id gets a short
+# directory name: its head, a digest of the whole id, and its window/timestamp
+# tail. run.json inside the directory records the full run_id.
+_SHORT_NAME = 96
+_HEAD = 16
+_TAIL = 41
+
+
+def report_directory_name(run_id: str) -> str:
+    if len(run_id) <= _SHORT_NAME:
+        return run_id
+    digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:16]
+    return f"{run_id[:_HEAD]}_{digest}_{run_id[-_TAIL:]}"
 
 
 def _report_directory(root: Path, run_id: str) -> Path:
-    if len(run_id) <= _COMPONENT:
-        return root / run_id
-    parts = [run_id[index : index + _COMPONENT] for index in range(0, len(run_id), _COMPONENT)]
-    return root.joinpath(*parts)
+    return root / report_directory_name(run_id)
 
 
 class ReportJournal:
@@ -125,6 +144,9 @@ class ReportJournal:
         if self.paper_path is not None and journal.resolve() == self.paper_path.resolve():
             raise ValueError("report journal is not the paper ledger")
         directory.mkdir(parents=True)
+        (directory / "run.json").write_text(
+            json.dumps({"run_id": run_id}, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         self.repo = JournalRepository(journal, synchronous_off=True)
         self.directory = directory
         return directory
@@ -279,6 +301,30 @@ def _decode_position(payload: str, row: PositionRow) -> tuple[PositionState, flo
         entry_bar_open_time=row.entry_bar_open_time,
     )
     return state, arm_close
+
+
+def _decision_plan(decision) -> RiskPlan | None:
+    if decision is None or not decision.risk_plan_json:
+        return None
+    try:
+        return RiskPlan.model_validate_json(decision.risk_plan_json)
+    except ValueError:
+        return None
+
+
+def _decision_exit_reason(decision) -> ExitReason | None:
+    if decision is None or not decision.reason_chain_json:
+        return None
+    try:
+        steps = json.loads(decision.reason_chain_json)
+    except json.JSONDecodeError:
+        return None
+    known = {reason.value for reason in ExitReason}
+    for step in steps if isinstance(steps, list) else ():
+        code = step.get("code") if isinstance(step, dict) else None
+        if code in known:
+            return ExitReason(code)
+    return None
 
 
 def _parse_z(value: str):

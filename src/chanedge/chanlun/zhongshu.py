@@ -23,6 +23,12 @@ class _Zhongshu:
     member_indexes: list[int]
     confirm_index: int
     ended: bool = False
+    # Departure scan memo for one compute. The walk asks for nondecreasing
+    # indexes, so each bar is scanned once per zhongshu instead of once per event.
+    scan_to: int = -1
+    scan_side: str = "inside"
+    scan_alive: bool = False
+    scan_start: int = 0
 
 
 @dataclass
@@ -72,7 +78,7 @@ class ZhongshuBook:
         )
         self.buffer = self.buffer[3:]
 
-    def publish(self, held: list) -> tuple[Zhongshu, ...]:
+    def publish(self, held: list, bars) -> tuple[Zhongshu, ...]:
         published: list[Zhongshu] = []
         for zs in self.zhongshus:
             members = [held[index].bi for index in zs.member_indexes]
@@ -90,6 +96,7 @@ class ZhongshuBook:
                     direction_into=zs.direction_into,
                     level=_BI_LEVEL,
                     confirmed=True,
+                    confirm_bar_open_time=bars[zs.confirm_index].open_time,
                 )
             )
         return tuple(published)

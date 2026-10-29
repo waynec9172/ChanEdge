@@ -28,6 +28,6 @@
 
 PR-1 到 PR-12 已完成。System One 進場路徑已接入，`systemone.enabled` 預設仍是 false。PR-13（唯讀圖形監控）沒有開始。使用者沒有明確說要做 PR-13 之前，不要做網頁、不要綁監控埠、不要加 `execution/live.py`、不要接 Telegram。不要把 `paper.yaml` 的旗標打開。
 
-上次在倉庫的 `.venv` 跑完整測試是 277 passed、12.82 秒。這個數字只是當時的結果。審查時自己重跑，以終端機輸出為準。
+上次在倉庫的 `.venv` 跑完整測試是 277 passed、12.82 秒（Windows）。2026-10-29 修正審查問題之後，在 Linux、Python 3.13 是 293 passed。這些數字只是當時的結果。審查時自己重跑，以終端機輸出為準。
 
 沒有使用者要求時不要 commit。

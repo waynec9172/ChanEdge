@@ -1,7 +1,13 @@
-"""Shadow book. Same matcher, separate from cash and the real position."""
+"""Shadow book. Same matcher, separate from cash and the real position.
+
+Every candidate gets its own shadow. Two shadows on one symbol run side by
+side, each to its own exit, and neither is cut short by the other or by a real
+entry on that symbol.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
@@ -9,31 +15,39 @@ from chanedge.backtest.matcher import match_bar
 from chanedge.domain.accounting import quantize, update_cash
 from chanedge.domain.bars import Bar
 from chanedge.domain.chanlun import ChanSignal
-from chanedge.domain.enums import OrderSide, Side
+from chanedge.domain.enums import AmendReason, OrderSide, Side
 from chanedge.domain.records import PendingOrder
-from chanedge.domain.risk import AmendStop, PositionReview, PositionState, RiskPlan
+from chanedge.domain.risk import PositionReview, PositionState, RiskPlan
 
 _ZERO = Decimal("0")
 
 
+@dataclass
+class _Shadow:
+    key: str
+    symbol: str
+    row: dict[str, object]
+    position: PositionState | None = None
+    pending: dict[str, PendingOrder] = field(default_factory=dict)
+    arm: float | None = None
+
+
 class ShadowBook:
     def __init__(self) -> None:
-        self.positions: dict[str, PositionState] = {}
-        self.pending: dict[str, PendingOrder] = {}
-        self.arm: dict[str, float | None] = {}
         self.rows: list[dict[str, object]] = []
-        self._open: dict[str, dict[str, object]] = {}
-
-    def position(self, symbol: str) -> PositionState | None:
-        return self.positions.get(symbol)
+        self._shadows: dict[str, _Shadow] = {}
+        self._count = 0
 
     def active_symbols(self) -> set[str]:
-        names = set(self.positions)
-        names.update(order.symbol for order in self.pending.values())
-        return names
+        return {shadow.symbol for shadow in self._shadows.values()}
 
-    def pending_for(self, symbol: str) -> tuple[PendingOrder, ...]:
-        return tuple(order for order in self.pending.values() if order.symbol == symbol)
+    def reviewable(self, symbol: str) -> tuple[tuple[str, PositionState], ...]:
+        """(key, position) for every filled shadow on symbol, in opening order."""
+        return tuple(
+            (shadow.key, shadow.position)
+            for shadow in self._shadows.values()
+            if shadow.symbol == symbol and shadow.position is not None
+        )
 
     def open_shadow(
         self,
@@ -42,9 +56,6 @@ class ShadowBook:
         signal: ChanSignal,
         decision_time: datetime,
     ) -> None:
-        if symbol in self.positions or symbol in {order.symbol for order in self.pending.values()}:
-            self.rows.append(_row(symbol, signal, decision_time, qty=None, closed=True))
-            return
         reported = None
         if plan.structure_stop_price is not None and not plan.rejected and plan.qty > _ZERO:
             reported = plan.qty
@@ -60,10 +71,12 @@ class ShadowBook:
             return
         internal = plan.qty if not plan.rejected and plan.qty > _ZERO else Decimal("1")
         side = OrderSide.BUY if plan.side is Side.LONG else OrderSide.SELL
-        client = f"shadow:{signal.id}"
-        self.pending[client] = PendingOrder(
-            client_order_id=client,
-            decision_id=client,
+        self._count += 1
+        key = f"shadow:{self._count}:{signal.id}"
+        shadow = _Shadow(key=key, symbol=symbol, row=row)
+        shadow.pending[key] = PendingOrder(
+            client_order_id=key,
+            decision_id=key,
             symbol=symbol,
             side=side,
             qty=quantize(internal),
@@ -74,37 +87,26 @@ class ShadowBook:
             entry_decision_time=decision_time,
             submitted_at=decision_time,
         )
-        self._open[symbol] = row
+        self._shadows[key] = shadow
 
-    def add_pending(self, order: PendingOrder) -> None:
-        self.pending[order.client_order_id] = order
-
-    def amend(
+    def apply_review(
         self,
-        symbol: str,
-        stop_price: float,
-        *,
-        arm_close: float | None = None,
-        replace_arm: bool = False,
+        key: str,
+        review: PositionReview,
+        bar_close: float | None,
+        decision_time: datetime,
     ) -> None:
-        position = self.positions.get(symbol)
-        if position is None:
+        shadow = self._shadows.get(key)
+        if shadow is None or shadow.position is None:
             return
-        self.positions[symbol] = position.model_copy(update={"stop_price": stop_price})
-        if replace_arm:
-            self.arm[symbol] = arm_close
-
-    def apply_review(self, symbol: str, review: PositionReview, bar_close: float | None, decision_time: datetime) -> None:
+        position = shadow.position
         if review.exit is not None:
-            position = self.positions.get(symbol)
-            if position is None:
-                return
             side = OrderSide.SELL if position.qty > 0 else OrderSide.BUY
-            client = f"shadow-exit:{symbol}:{decision_time.isoformat()}"
-            self.pending[client] = PendingOrder(
+            client = f"{key}:exit:{decision_time.isoformat()}"
+            shadow.pending[client] = PendingOrder(
                 client_order_id=client,
                 decision_id=client,
-                symbol=symbol,
+                symbol=shadow.symbol,
                 side=side,
                 qty=abs(position.qty),
                 reduce_only=True,
@@ -116,7 +118,10 @@ class ShadowBook:
             )
             return
         if review.amend_stop is not None:
-            self._amend_reason(symbol, review.amend_stop, bar_close)
+            amend = review.amend_stop
+            shadow.position = position.model_copy(update={"stop_price": amend.new_stop_price})
+            if amend.reason is AmendReason.BREAKEVEN:
+                shadow.arm = bar_close
 
     def match(
         self,
@@ -126,28 +131,29 @@ class ShadowBook:
         fee_bps: Decimal,
         slippage_bps: Decimal,
     ) -> None:
-        fills = match_bar(
-            self.positions.get(symbol),
-            self.pending_for(symbol),
-            bar,
-            fee_bps=fee_bps,
-            slippage_bps=slippage_bps,
-            arm_close=self.arm.get(symbol),
-        )
-        for fill in fills:
-            self._apply(fill)
+        for shadow in [item for item in self._shadows.values() if item.symbol == symbol]:
+            fills = match_bar(
+                shadow.position,
+                tuple(shadow.pending.values()),
+                bar,
+                fee_bps=fee_bps,
+                slippage_bps=slippage_bps,
+                arm_close=shadow.arm,
+            )
+            for fill in fills:
+                self._apply(shadow, fill)
 
     def finish(self) -> None:
-        for symbol, row in self._open.items():
-            if row.get("closed"):
+        for shadow in self._shadows.values():
+            if shadow.row.get("closed"):
                 continue
-            row["unfinished"] = True
-            row["exit_reason"] = None
-            row["closed"] = False
-        self._open = {}
+            shadow.row["unfinished"] = True
+            shadow.row["exit_reason"] = None
+            shadow.row["closed"] = False
+        self._shadows = {}
 
-    def _apply(self, fill) -> None:
-        position = self.positions.get(fill.symbol)
+    def _apply(self, shadow: _Shadow, fill) -> None:
+        position = shadow.position
         qty = position.qty if position is not None else _ZERO
         avg = quantize(position.avg_price) if position is not None else _ZERO
         _cash, new_qty, new_avg = update_cash(
@@ -160,14 +166,14 @@ class ShadowBook:
             side=fill.side,
             reduce_only=fill.reduce_only,
         )
-        pending = self.pending.pop(fill.client_order_id, None)
-        row = self._open.get(fill.symbol)
+        pending = shadow.pending.pop(fill.client_order_id, None)
+        row = shadow.row
         if not fill.reduce_only:
             if pending is None or pending.plan is None or pending.entry_decision_time is None:
                 return
             if pending.plan.structure_stop_price is None:
                 return
-            self.positions[fill.symbol] = PositionState(
+            shadow.position = PositionState(
                 symbol=fill.symbol,
                 qty=new_qty,
                 avg_price=float(new_avg),
@@ -177,33 +183,23 @@ class ShadowBook:
                 entry_decision_time=pending.entry_decision_time,
                 entry_bar_open_time=fill.fill_time,
             )
-            if row is not None:
-                row["entry_price"] = format(fill.price, ".8f")
+            row["entry_price"] = format(fill.price, ".8f")
             return
         if position is None:
             return
-        updated = position.model_copy(update={"qty": new_qty, "avg_price": float(new_avg)})
         if new_qty == _ZERO:
-            self.positions.pop(fill.symbol, None)
-            self.arm.pop(fill.symbol, None)
-            if row is not None:
-                row["closed"] = True
-                row["unfinished"] = False
-                row["exit_price"] = format(fill.price, ".8f")
-                row["exit_reason"] = None if fill.exit_reason is None else str(fill.exit_reason)
-                row["r_multiple"] = _r(position, fill.price)
-                self._open.pop(fill.symbol, None)
+            row["closed"] = True
+            row["unfinished"] = False
+            row["exit_price"] = format(fill.price, ".8f")
+            row["exit_reason"] = None if fill.exit_reason is None else str(fill.exit_reason)
+            row["r_multiple"] = _r(position, fill.price)
+            self._shadows.pop(shadow.key, None)
             return
-        self.positions[fill.symbol] = updated
-
-    def _amend_reason(self, symbol: str, amend: AmendStop, bar_close: float | None) -> None:
-        replace = str(amend.reason) == "breakeven"
-        self.amend(
-            symbol,
-            amend.new_stop_price,
-            arm_close=bar_close if replace else None,
-            replace_arm=replace,
-        )
+        updated = position.model_copy(update={"qty": new_qty, "avg_price": float(new_avg)})
+        if fill.partial_reason is not None:
+            plan = updated.plan.model_copy(update={"partial_targets": ()})
+            updated = updated.model_copy(update={"plan": plan})
+        shadow.position = updated
 
 
 def _row(symbol: str, signal: ChanSignal, decision_time: datetime, *, qty: str | None, closed: bool) -> dict[str, object]:

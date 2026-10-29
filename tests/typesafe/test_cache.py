@@ -180,3 +180,55 @@ def _payload(**_kwargs):
 
 def _explode(**_kwargs):
     raise AssertionError("cache hit must not call the transport")
+
+
+def _sdk_answers() -> dict:
+    answers: dict[str, object] = {}
+    for name, spec in QUESTIONS.items():
+        assert isinstance(spec, dict)
+        if spec["type"] == "choice":
+            answers[name] = {
+                "type": "choice",
+                "choice": "GO",
+                "confidence": 0.7,
+                "probabilities": {"GO": 0.7, "NO_GO": 0.3},
+            }
+            continue
+        levels = len(spec["criteria"])
+        answers[name] = {
+            "type": "score",
+            "score": 1.0,
+            "confidence": 0.8,
+            "legend": {index: str(index) for index in range(levels)},
+            "probabilities": {index: 1.0 / levels for index in range(levels)},
+        }
+    return answers
+
+
+def test_real_sdk_response_models_parse_and_cache(tmp_path: Path) -> None:
+    sdk = pytest.importorskip("typesafe_sdk")
+    response = sdk.SystemOneResponse.model_validate(
+        {"model": MODEL_PIN, "usage": {"input_tokens": 10, "output_tokens": 5}, "answers": _sdk_answers()}
+    )
+
+    class _Sdk:
+        def system_one(self, **_kwargs):
+            return response
+
+    client = JsonlClient(
+        path=tmp_path / "systemone.jsonl",
+        model_pin=MODEL_PIN,
+        question_set="entry-v1",
+        timeout_seconds=1.5,
+        base_url="https://api.typesafe.ai",
+        api_key="key",
+    )
+    client._sdk = _Sdk()
+    result = client.system_one(state={"symbol": "BTC/USDT"}, questions=QUESTIONS, model=MODEL_PIN)
+    assert result.model == MODEL_PIN
+    assert result.scores["structure"].probabilities["0"] == pytest.approx(0.2)
+    assert result.choices["final_decision"].choice == "GO"
+    assert result.input_tokens == 10
+    reader = JsonlReader(tmp_path / "systemone.jsonl", MODEL_PIN)
+    key = cache_key(MODEL_PIN, "entry-v1", QUESTIONS, {"symbol": "BTC/USDT"})
+    assert reader.lookup(key) is not None

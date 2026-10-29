@@ -18,6 +18,9 @@ from chanedge.domain.chanlun import ChanSnapshot, Segment
 from chanedge.domain.enums import Timeframe
 
 
+PENDING_ID = "cs_pending"
+
+
 class ChanEngine:
     def __init__(
         self,
@@ -42,7 +45,9 @@ class ChanEngine:
         *,
         timeframe: Timeframe,
         as_of: datetime,
+        identify: bool = True,
     ) -> ChanSnapshot:
+        """identify=False leaves snapshot_id as PENDING_ID. Call identify() before writing it anywhere."""
         series = tuple(bars)
         _validate(series, timeframe, as_of)
         merged = include_merge(series)
@@ -58,7 +63,7 @@ class ChanEngine:
         if self.segment_enabled:
             segments = minimal_break(state.bis, timeframe)
         pending = ChanSnapshot(
-            snapshot_id="cs_pending",
+            snapshot_id=PENDING_ID,
             symbol=series[0].symbol,
             timeframe=timeframe,
             as_of=as_of,
@@ -71,13 +76,20 @@ class ChanEngine:
             fenxings=tuple(draft.fenxing for draft in drafts),
             bis=state.bis,
             segments=segments,
-            zhongshus=state.book.publish(state.held),
+            zhongshus=state.book.publish(state.held, series),
             signals=tuple(state.signals),
             structure_bias=bias_at(state.book, state.held, series),
             last_confirmed_bi_id=state.held[-1].bi.id if state.held else None,
             active_zhongshu_id=active_zhongshu_id(state.book, state.held, series),
         )
-        return pending.model_copy(update={"snapshot_id": _snapshot_id(pending)})
+        if not identify:
+            return pending
+        return self.identify(pending)
+
+    def identify(self, snapshot: ChanSnapshot) -> ChanSnapshot:
+        if snapshot.snapshot_id != PENDING_ID:
+            return snapshot
+        return snapshot.model_copy(update={"snapshot_id": _snapshot_id(snapshot)})
 
 
 def _validate(bars: tuple[Bar, ...], timeframe: Timeframe, as_of: datetime) -> None:

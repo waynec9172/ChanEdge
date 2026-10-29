@@ -88,28 +88,51 @@ def validate_for_cache(questions: dict[str, object], result: SystemOneResult) ->
 
 
 class JsonlCache:
+    """Rows are parsed once. Each locked read only parses lines appended since the last one."""
+
     def __init__(self, path: Path, model_pin: str) -> None:
         self.path = Path(path)
         self.model_pin = model_pin
+        self._found: dict[str, SystemOneResult] = {}
+        self._offset = 0
 
     def read(self) -> dict[str, SystemOneResult]:
         with _exclusive(self.path) as handle:
-            return _rows(handle, self.model_pin)
+            self._catch_up(handle)
+            return dict(self._found)
 
     def lookup(self, key: str) -> SystemOneResult | None:
-        return self.read().get(key)
+        with _exclusive(self.path) as handle:
+            self._catch_up(handle)
+            return self._found.get(key)
 
     def append(self, key: str, result: SystemOneResult) -> None:
         if result.model != self.model_pin:
             return
         with _exclusive(self.path) as handle:
-            found = _rows(handle, self.model_pin)
-            if key in found:
+            self._catch_up(handle)
+            if key in self._found:
                 return
             line = canonical_json(_plain(key, result)) + "\n"
             handle.seek(0, os.SEEK_END)
             handle.write(line.encode("utf-8"))
             handle.flush()
+            self._catch_up(handle)
+
+    def _catch_up(self, handle) -> None:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        if size < self._offset:
+            self._found = {}
+            self._offset = 0
+        handle.seek(self._offset)
+        raw = handle.read()
+        cut = raw.rfind(b"\n")
+        if cut < 0:
+            return
+        complete = raw[: cut + 1]
+        self._offset += len(complete)
+        _parse_lines(complete.decode("utf-8", errors="replace"), self.model_pin, self._found)
 
 
 class JsonlReader:
@@ -177,14 +200,8 @@ def _plain(key: str, result: SystemOneResult) -> dict[str, object]:
     }
 
 
-def _rows(handle, model_pin: str) -> dict[str, SystemOneResult]:
-    handle.seek(0)
-    raw = handle.read()
-    text = raw.decode("utf-8", errors="replace")
-    if text and not text.endswith("\n"):
-        cut = text.rfind("\n")
-        text = "" if cut < 0 else text[: cut + 1]
-    found: dict[str, SystemOneResult] = {}
+def _parse_lines(text: str, model_pin: str, found: dict[str, SystemOneResult]) -> None:
+    """Complete lines only. The first line for a key wins."""
     for line in text.splitlines():
         if not line:
             continue
@@ -197,7 +214,6 @@ def _rows(handle, model_pin: str) -> dict[str, SystemOneResult]:
         if not isinstance(key, str) or key in found or result.model != model_pin:
             continue
         found[key] = result
-    return found
 
 
 def _result(payload: object) -> SystemOneResult:

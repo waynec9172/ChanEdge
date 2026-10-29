@@ -211,7 +211,7 @@ def _departure(
     last_index: int,
 ) -> tuple[str, int] | None:
     """Live departure through last_index. Scan starts at the creating third bi's end bar."""
-    confirm = _confirm_index(snapshot, zone, len(bars))
+    confirm = _confirm_index(snapshot, zone, bars)
     if last_index < confirm:
         return None
     side = "inside"
@@ -239,8 +239,22 @@ def _departure(
     return side, start
 
 
-def _confirm_index(snapshot: ChanSnapshot, zone: Zhongshu, bar_count: int) -> int:
-    if len(zone.bi_ids) < 3 or bar_count < 1:
+def _confirm_index(
+    snapshot: ChanSnapshot,
+    zone: Zhongshu,
+    bars: Sequence[Bar],
+) -> int:
+    """The frozen scan start. A replaced third-bi endpoint does not move it."""
+    bar_count = len(bars)
+    if bar_count < 1:
+        return 0
+    if zone.confirm_bar_open_time is not None:
+        for index, bar in enumerate(bars):
+            if bar.open_time == zone.confirm_bar_open_time:
+                return index
+        if zone.confirm_bar_open_time < bars[0].open_time:
+            return 0
+    if len(zone.bi_ids) < 3:
         return 0
     bi = next((item for item in snapshot.bis if item.id == zone.bi_ids[2]), None)
     if bi is None:
