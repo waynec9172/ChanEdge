@@ -383,12 +383,33 @@ class VisionFunding:
 
 
 class ParquetBars:
+    """Backtest bar source. index and rows let the loop read a window at a time."""
+
     def __init__(self, store, venue: str) -> None:
         self.store = store
         self.venue = venue
+        self._whole: dict[tuple[str, Timeframe], tuple] = {}
 
     def load(self, symbol: str, timeframe: Timeframe):
         return tuple(item.bar for item in self.store.read(self.venue, symbol, timeframe))
+
+    def index(self, symbol: str, timeframe: Timeframe):
+        closes = self.store.close_index(self.venue, symbol, timeframe)
+        if closes is not None:
+            return closes
+        bars = self.load(symbol, timeframe)
+        self._whole[(symbol, timeframe)] = bars
+        return [int(bar.close_time.timestamp() * 1000) for bar in bars]
+
+    def rows(self, symbol: str, timeframe: Timeframe, lo: int, hi: int):
+        whole = self._whole.get((symbol, timeframe))
+        if whole is not None:
+            return whole[lo:hi]
+        return self.store.read_rows(self.venue, symbol, timeframe, lo, hi)
+
+    def release(self, symbol: str) -> None:
+        for timeframe in Timeframe:
+            self._whole.pop((symbol, timeframe), None)
 
 
 class FileUniverse:

@@ -86,6 +86,8 @@ chanedge = "chanedge.app.cli:main"
 
 `download`、`universe --reconstruct`、`backtest`、`jev-warm` 只讀本機檔，連不到交易所市場清單時在 stderr 警告，改用 vision CSV 推估規格。只有 `paper` 在讀不到市場清單時直接失敗。
 
+`backtest` 另有 `--resume <報告目錄>`。迴圈只載入在場幣種（榜上、持倉、掛單、影子單）的 K 線，每個週期只留引擎窗口加約 30 天，離場的幣種會釋放。每 96 根 15m（一天）在報告目錄寫一次 `checkpoint.pkl`（進度、broker 狀態、journal 的 rowid 標記）。程序中斷後用同樣的 `--config`/`--overlay`/`--root`/`--vision` 加 `--resume data/reports/<目錄>` 接著跑：journal 先截回檢查點，再從下一根開始，`--end` 可省略，會沿用原本的。設定或版本不同時會拒絕續跑。跑完會刪除 `checkpoint.pkl`。輸出和不中斷的一次跑完逐位元相同。`checkpoint.pkl` 是 pickle，只續跑本程式自己寫的目錄。報告庫用 `synchronous=OFF`：程序被殺可以續跑，但主機斷電可能損壞 journal，這時重跑。
+
 `backtest` 要放行進場必須加 `--overlay config/paper.yaml`：`default.yaml` 的 `safety.kill_switch` 是 true，回測照樣套用，所有進場都會被 `KILL_SWITCH` 否決，報告會沒有成交。這時命令會在 stderr 印警告。
 
 `main` 抓住例外，印出 `str(exc)`，回傳 1。`mode=live` 在組裝之前就失敗。`universe.mode` 為 `pin` 時，`download`、`universe`、`backtest` 回傳 1。紙交易才使用 pin 清單。

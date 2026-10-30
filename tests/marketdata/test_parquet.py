@@ -73,3 +73,15 @@ def test_merge_keeps_bars_after_the_incoming_range(tmp_path, make_bar) -> None:
     stored = store.read("binanceusdm", "BTC/USDT", Timeframe.M15)
     assert [item.bar.open_time for item in stored] == times
     assert stored[1].bar.close == 102.0
+
+
+def test_close_index_and_row_slices_match_the_whole_read(tmp_path, make_bar) -> None:
+    store = ParquetBarStore(tmp_path)
+    times = [T0 + timedelta(minutes=15 * index) for index in range(6)]
+    store.write_closed("binanceusdm", "BTC/USDT", Timeframe.M15, [store_bar(make_bar(open_time=t)) for t in times])
+    index = store.close_index("binanceusdm", "BTC/USDT", Timeframe.M15)
+    whole = [item.bar for item in store.read("binanceusdm", "BTC/USDT", Timeframe.M15)]
+    assert list(index) == [int(bar.close_time.timestamp() * 1000) for bar in whole]
+    assert store.read_rows("binanceusdm", "BTC/USDT", Timeframe.M15, 2, 5) == tuple(whole[2:5])
+    assert store.read_rows("binanceusdm", "BTC/USDT", Timeframe.M15, 3, 3) == ()
+    assert list(store.close_index("binanceusdm", "ETH/USDT", Timeframe.M15)) == []

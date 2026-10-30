@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from array import array
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,6 +87,42 @@ class ParquetBarStore:
         ]
         stored.sort(key=lambda item: item.bar.open_time)
         return tuple(stored)
+
+    def close_index(self, venue: str, symbol: str, timeframe: Timeframe) -> array | None:
+        """close_time in epoch ms per row, read from two columns alone.
+
+        Row i here is row i of read_rows. None means the file is not the sorted,
+        closed-only layout write_closed produces, so the caller reads it whole.
+        """
+        path = self.path(venue, symbol, timeframe)
+        if not path.exists():
+            return array("q")
+        try:
+            table = pq.read_table(path, columns=["close_time", "is_closed"])
+        except Exception as exc:
+            raise ParquetUnreadable(f"{path} cannot be opened") from exc
+        if not all(table.column("is_closed").to_pylist()):
+            return None
+        micros = table.column("close_time").cast(pa.int64()).to_pylist()
+        if any(later <= earlier for earlier, later in zip(micros, micros[1:])):
+            return None
+        return array("q", (value // 1000 for value in micros))
+
+    def read_rows(self, venue: str, symbol: str, timeframe: Timeframe, lo: int, hi: int) -> tuple[Bar, ...]:
+        """Bars for rows [lo, hi) of a file close_index accepted."""
+        path = self.path(venue, symbol, timeframe)
+        if hi <= lo or not path.exists():
+            return ()
+        try:
+            table = pq.read_table(path).slice(lo, hi - lo)
+        except Exception as exc:
+            raise ParquetUnreadable(f"{path} cannot be opened") from exc
+        columns = table.to_pydict()
+        names = list(columns)
+        return tuple(
+            _bar_from_row(dict(zip(names, values)), timeframe)
+            for values in zip(*(columns[name] for name in names))
+        )
 
     def write_closed(
         self,

@@ -17,7 +17,7 @@ from chanedge.app.paper_loop import (
     inferred_instrument,
 )
 from chanedge.app.pipeline import PipelineServices
-from chanedge.backtest.loop import _Series, _at, _decision_times, _preload, _quality, _universe_date, _windowed
+from chanedge.backtest.loop import _BarCache, _preload, _quality, _times_from_source, _universe_date
 from chanedge.domain.canon import format_fixed8
 from chanedge.domain.enums import RuntimeMode, Timeframe
 from chanedge.domain.records import PipelineRequest
@@ -70,17 +70,12 @@ def run_jev_warm(app, *, vision_root: Path, end: date) -> int:
         text = _kline_text(vision_root, symbol)
         instruments[symbol] = app.instruments.get(symbol) or inferred_instrument(settings, symbol, text)
     source = ParquetBars(app.store, settings.runtime.venue)
-    store = {
-        timeframe: {symbol: _Series(source.load(symbol, timeframe)) for symbol in symbols}
-        for timeframe in Timeframe
-    }
     refresh = settings.universe.refresh_minute
-    times = _decision_times(
-        {symbol: series.bars for symbol, series in store[Timeframe.M15].items()}, history, end, refresh
-    )
+    times = _times_from_source(source, symbols, history, end, refresh)
     quality = backtest_quality(settings)
     boards = _preload(FileUniverse(app.root, settings.runtime.venue), times, refresh)
     limits = _windows(settings)
+    cache = _BarCache(source, limits)
     services = _warm_services(app.services)
     account = AccountView(
         equity_quote=Decimal("0"),
@@ -95,11 +90,14 @@ def run_jev_warm(app, *, vision_root: Path, end: date) -> int:
     for decision_time in times:
         day = _universe_date(decision_time, refresh)
         board = boards[day]
+        cache.retain(set(board))
+        for symbol in [name for name in previous if name not in board]:
+            del previous[symbol]
         for symbol, rank in sorted(board.items(), key=lambda item: (item[1], item[0])):
-            if _at(store[Timeframe.M15], symbol, decision_time) is None:
+            if cache.at(symbol, decision_time) is None:
                 continue
             request_bars = {
-                timeframe: _windowed(store[timeframe], symbol, decision_time, limits[timeframe])
+                timeframe: cache.window(symbol, timeframe, decision_time, limits[timeframe])
                 for timeframe in Timeframe
             }
             request = PipelineRequest(

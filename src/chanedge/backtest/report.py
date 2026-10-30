@@ -138,13 +138,43 @@ def attach_funding(trades: list[dict], source) -> int:
     return len(missing)
 
 
+class DecisionStats:
+    """Summary counts gathered one decision at a time, so the run does not keep the decisions."""
+
+    def __init__(self, weights: dict[str, float]) -> None:
+        self.weights = weights
+        self.count = 0
+        self.vetoes: dict[str, int] = {}
+        self.risk: dict[str, int] = {}
+        self.risk_by_symbol: dict[str, dict[str, int]] = {}
+        self.session_diffs = 0
+
+    def add(self, result) -> None:
+        self.count += 1
+        if result.rules is not None:
+            for veto in result.rules.vetoes:
+                self.vetoes[veto.code.value] = self.vetoes.get(veto.code.value, 0) + 1
+        plan = result.plan
+        if plan is not None and plan.reject_reason is not None:
+            code = plan.reject_reason.value
+            self.risk[code] = self.risk.get(code, 0) + 1
+            by_symbol = self.risk_by_symbol.setdefault(code, {})
+            symbol = result.decision.symbol
+            by_symbol[symbol] = by_symbol.get(symbol, 0) + 1
+        assessment = result.assessment
+        if assessment is not None and result.group == "entry" and _action_changes(assessment, self.weights):
+            self.session_diffs += 1
+
+    def by_symbol(self, code: str) -> dict[str, int]:
+        return dict(self.risk_by_symbol.get(code, {}))
+
+
 def build_summary(
     *,
-    decisions: list,
+    stats: DecisionStats,
     trades: list[dict],
     overlaps: list[float],
     research: ResearchTracker,
-    weights: dict[str, float],
     overlap_peak: float,
     overlap_width: float,
     overlap_penalty_above: float,
@@ -161,16 +191,16 @@ def build_summary(
         **tracked,
         "overlap_term_mean": None if not terms else sum(terms) / len(terms),
         "overlap_penalty_fraction": None if not overlaps else len(above) / len(overlaps),
-        "cost_r_by_symbol": _reason_counts(decisions, VetoCode.COST_R.value),
+        "cost_r_by_symbol": stats.by_symbol(VetoCode.COST_R.value),
         "inferred_fill_count": inferred_fill_count,
-        "instrument_spec_count": sum(_reason_counts(decisions, VetoCode.INSTRUMENT_SPEC.value).values()),
-        "min_qty_count": sum(_reason_counts(decisions, VetoCode.MIN_QTY.value).values()),
-        "veto_histogram": _veto_histogram(decisions),
-        "risk_reject_histogram": _risk_histogram(decisions),
+        "instrument_spec_count": sum(stats.by_symbol(VetoCode.INSTRUMENT_SPEC.value).values()),
+        "min_qty_count": sum(stats.by_symbol(VetoCode.MIN_QTY.value).values()),
+        "veto_histogram": dict(stats.vetoes),
+        "risk_reject_histogram": dict(stats.risk),
         "by_signal": {name: _stats([row for row in trades if row.get("signal_type") == name]) for name in _SIGNAL_TYPES},
         "by_exit_reason": {name: _stats([row for row in trades if row.get("exit_reason") == name]) for name in _EXIT_REASONS},
         "partial_then_remainder": _partial_split(trades),
-        "session_weight_zero_action_diffs": _session_diffs(decisions, weights),
+        "session_weight_zero_action_diffs": stats.session_diffs,
         "missing_funding_months": missing_funding_months,
         "fee_drag": format(quantize(fee_drag), ".8f"),
         "max_drawdown": _drawdown(equity),
@@ -330,38 +360,6 @@ class ResearchTracker:
         }
 
 
-def _reason_counts(decisions: list, code: str) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for decision in decisions:
-        plan = decision.plan
-        if plan is None or plan.reject_reason is None or plan.reject_reason.value != code:
-            continue
-        counts[decision.decision.symbol] = counts.get(decision.decision.symbol, 0) + 1
-    return counts
-
-
-def _veto_histogram(decisions: list) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for decision in decisions:
-        rules = decision.rules
-        if rules is None:
-            continue
-        for veto in rules.vetoes:
-            counts[veto.code.value] = counts.get(veto.code.value, 0) + 1
-    return counts
-
-
-def _risk_histogram(decisions: list) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for decision in decisions:
-        plan = decision.plan
-        if plan is None or plan.reject_reason is None:
-            continue
-        code = plan.reject_reason.value
-        counts[code] = counts.get(code, 0) + 1
-    return counts
-
-
 def _partial_split(trades: list[dict]) -> dict[str, dict[str, int]]:
     split = {name: {reason: 0 for reason in _EXIT_REASONS} for name in ("prior_swing", "r_multiple")}
     for trade in trades:
@@ -370,17 +368,6 @@ def _partial_split(trades: list[dict]) -> dict[str, dict[str, int]]:
         if kind in split and reason in split[kind]:
             split[kind][reason] += 1
     return split
-
-
-def _session_diffs(decisions: list, weights: dict[str, float]) -> int:
-    diffs = 0
-    for decision in decisions:
-        assessment = decision.assessment
-        if assessment is None or decision.group != "entry":
-            continue
-        if _action_changes(assessment, weights):
-            diffs += 1
-    return diffs
 
 
 def _action_changes(assessment, weights: dict[str, float]) -> bool:

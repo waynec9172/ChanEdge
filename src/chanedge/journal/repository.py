@@ -240,6 +240,60 @@ class JournalRepository:
             ).mappings()
             return tuple(_decision_row(row) for row in rows)
 
+    def decision_count(self) -> int:
+        with self._read() as connection:
+            return int(connection.exec_driver_sql("SELECT COUNT(*) FROM decisions").scalar() or 0)
+
+    def decisions_in_order(self, offset: int, limit: int) -> tuple[DecisionRow, ...]:
+        """Rows in insertion order. A backtest inserts each bar's decisions in pipeline order."""
+        with self._read() as connection:
+            rows = connection.execute(
+                text("SELECT * FROM decisions ORDER BY rowid LIMIT :limit OFFSET :offset"),
+                {"limit": limit, "offset": offset},
+            ).mappings()
+            return tuple(_decision_row(row) for row in rows)
+
+    def save_point(self) -> dict[str, object]:
+        """What a resumed backtest needs to put this file back to the last checkpoint."""
+        with self._read() as connection:
+            marks = {
+                table: int(connection.exec_driver_sql(f"SELECT COALESCE(MAX(rowid), 0) FROM {table}").scalar() or 0)
+                for table in ("decisions", "orders", "fills")
+            }
+            pending = [
+                row[0]
+                for row in connection.execute(
+                    text("SELECT client_order_id FROM orders WHERE status = :status"),
+                    {"status": PENDING_ORDER_STATUS},
+                )
+            ]
+            positions = [dict(row) for row in connection.exec_driver_sql("SELECT * FROM positions").mappings()]
+            cash = connection.exec_driver_sql("SELECT cash_quote FROM accounts WHERE account_id = 1").scalar()
+        return {"marks": marks, "pending": pending, "positions": positions, "cash": cash}
+
+    def restore_point(self, point: dict[str, object]) -> None:
+        """Drop rows written after save_point and restore what later bars updated in place."""
+        marks = point["marks"]
+        assert isinstance(marks, dict)
+        with self._write() as connection:
+            for table in ("decisions", "orders", "fills"):
+                connection.exec_driver_sql(f"DELETE FROM {table} WHERE rowid > ?", (int(marks[table]),))
+            for client_order_id in point["pending"]:  # type: ignore[union-attr]
+                connection.execute(
+                    text("UPDATE orders SET status = :status WHERE client_order_id = :id"),
+                    {"status": PENDING_ORDER_STATUS, "id": client_order_id},
+                )
+            connection.exec_driver_sql("DELETE FROM positions")
+            for row in point["positions"]:  # type: ignore[union-attr]
+                names = list(row)
+                connection.exec_driver_sql(
+                    f"INSERT INTO positions ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
+                    tuple(row[name] for name in names),
+                )
+            connection.exec_driver_sql(
+                "UPDATE accounts SET cash_quote = ? WHERE account_id = 1", (point["cash"],)
+            )
+
     def insert_order(self, row: OrderRow) -> None:
         _require_aware(row.submitted_at)
         with self._write() as connection:

@@ -29,7 +29,7 @@ from chanedge.app.paper_loop import (
     startup_target,
 )
 from chanedge.app.paper_loop import _kline_text, _symbols_in_files, _windows
-from chanedge.backtest.loop import run_backtest
+from chanedge.backtest.loop import checkpoint_end, run_backtest
 from chanedge.config.load import load_settings
 from chanedge.domain.risk import AccountView
 from chanedge.execution.paper import InMemoryLedger, PaperBroker
@@ -83,7 +83,11 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
             markets_required=args.command == "paper",
         )
         vision = Path(args.vision) if args.vision else app.root
-        end = _end(args.end, app.clock.now())
+        resume = Path(args.resume) if getattr(args, "resume", None) else None
+        if resume is not None and not args.end:
+            end = checkpoint_end(resume)
+        else:
+            end = _end(args.end, app.clock.now())
         if args.command == "download":
             download_history(app, vision_root=vision, end=end)
         elif args.command == "universe":
@@ -99,7 +103,7 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
                     "will have no trades. Pass --overlay config/paper.yaml to backtest entries.",
                     file=sys.stderr,
                 )
-            outcome = run_backtest_command(app, vision_root=vision, end=end)
+            outcome = run_backtest_command(app, vision_root=vision, end=end, resume=resume)
             if outcome.incomplete:
                 return 3
         elif args.command == "jev-warm":
@@ -147,7 +151,7 @@ def run_monitor(settings, root: Path, *, call=None) -> int:
     return (call or subprocess.call)(command)
 
 
-def run_backtest_command(app, *, vision_root: Path, end: date):
+def run_backtest_command(app, *, vision_root: Path, end: date, resume: Path | None = None):
     """Inject the PR-11 loop. This path does not sleep and does not read the paper book."""
     settings = app.settings
     history = date.fromisoformat(settings.marketdata.history_start)
@@ -197,6 +201,7 @@ def run_backtest_command(app, *, vision_root: Path, end: date):
         windows=_windows(settings),
         full_log=False,
         halt_on=halt,
+        resume=resume,
     )
     if settings.systemone.enabled:
         _write_systemone(result, app.systemone_reader)
@@ -265,7 +270,8 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("download", parents=[parent])
     universe = commands.add_parser("universe", parents=[parent])
     universe.add_argument("--reconstruct", action="store_true")
-    commands.add_parser("backtest", parents=[parent])
+    backtest = commands.add_parser("backtest", parents=[parent])
+    backtest.add_argument("--resume", default=None, help="report directory of an interrupted run")
     paper = commands.add_parser("paper", parents=[parent])
     paper.add_argument("--once", action="store_true")
     commands.add_parser("jev-warm", parents=[parent])

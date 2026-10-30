@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from chanedge.domain.canon import format_fixed8, format_time_z
@@ -123,6 +124,70 @@ def _report_directory(root: Path, run_id: str) -> Path:
     return root / report_directory_name(run_id)
 
 
+class StoredDecisions(Sequence):
+    """The run's decisions, read back from the report journal in pipeline order.
+
+    A multi-year backtest writes millions of rows; this reads them in pages
+    instead of keeping them in memory.
+    """
+
+    _PAGE = 5000
+
+    def __init__(self, repo: JournalRepository) -> None:
+        self._repo = repo
+
+    def __len__(self) -> int:
+        return self._repo.decision_count()
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(self[item] for item in range(*index.indices(len(self))))
+        size = len(self)
+        if index < 0:
+            index += size
+        if not 0 <= index < size:
+            raise IndexError("decision index out of range")
+        return _record(self._repo.decisions_in_order(index, 1)[0])
+
+    def __iter__(self) -> Iterator[DecisionRecord]:
+        offset = 0
+        while True:
+            page = self._repo.decisions_in_order(offset, self._PAGE)
+            if not page:
+                return
+            yield from (_record(row) for row in page)
+            offset += len(page)
+
+
+def _record(row) -> DecisionRecord:
+    return DecisionRecord(
+        symbol=row.symbol,
+        decision_time=row.decision_time,
+        action=row.action,
+        config_hash=row.config_hash,
+        engine_version=row.engine_version,
+        feature_version=row.feature_version,
+        marketdata_version=row.marketdata_version,
+        universe_date=row.universe_date,
+        created_at=row.created_at,
+        decision_id=row.decision_id,
+        rank=row.rank,
+        proposed_jev_action=row.proposed_jev_action,
+        size_qty=row.size_qty,
+        stop_price=row.stop_price,
+        snapshot_id_m15=row.snapshot_id_m15,
+        snapshot_id_h1=row.snapshot_id_h1,
+        snapshot_id_h4=row.snapshot_id_h4,
+        feature_json=row.feature_json,
+        jev_json=row.jev_json,
+        hard_rule_json=row.hard_rule_json,
+        risk_plan_json=row.risk_plan_json,
+        reason_chain_json=row.reason_chain_json,
+        order_ids_json=row.order_ids_json,
+        calibrated=row.calibrated,
+    )
+
+
 class ReportJournal:
     """One report directory. Refuses the paper database and a second run."""
 
@@ -150,6 +215,33 @@ class ReportJournal:
         self.repo = JournalRepository(journal, synchronous_off=True)
         self.directory = directory
         return directory
+
+    def resume_run(self, directory: Path | str) -> Path:
+        """Reopen a report directory that holds a checkpoint. restore_point trims it."""
+        directory = Path(directory)
+        journal = directory / "journal.sqlite"
+        if not journal.is_file():
+            raise FileNotFoundError(f"no report journal in {directory}")
+        if self.paper_path is not None and journal.resolve() == self.paper_path.resolve():
+            raise ValueError("report journal is not the paper ledger")
+        self.repo = JournalRepository(journal, synchronous_off=True)
+        self.directory = directory
+        return directory
+
+    def save_point(self) -> dict[str, object]:
+        if self.repo is None:
+            raise RuntimeError("report run has not started")
+        return self.repo.save_point()
+
+    def restore_point(self, point: dict[str, object]) -> None:
+        if self.repo is None:
+            raise RuntimeError("report run has not started")
+        self.repo.restore_point(point)
+
+    def decisions(self) -> StoredDecisions:
+        if self.repo is None:
+            raise RuntimeError("report run has not started")
+        return StoredDecisions(self.repo)
 
     def commit_bar(self, commit: BarCommit) -> None:
         if self.repo is None:

@@ -6,18 +6,28 @@ import app, marketdata, or journal, and it does not call the exchange port.
 
 from __future__ import annotations
 
+import os
+import pickle
 import time
 from bisect import bisect_right
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
 from chanedge.backtest.matcher import match_bar
-from chanedge.backtest.report import ResearchTracker, attach_funding, build_summary, build_trades, write_report
+from chanedge.backtest.report import (
+    DecisionStats,
+    ResearchTracker,
+    attach_funding,
+    build_summary,
+    build_trades,
+    write_report,
+)
 from chanedge.backtest.shadow import ShadowBook
 from chanedge.domain.accounting import mark_pnl, quantize
-from chanedge.domain.bars import DataQuality, Instrument
+from chanedge.domain.bars import DataQuality, Instrument, timeframe_duration
 from chanedge.domain.enums import AmendReason, DecisionAction, InstrumentSource, Side, Timeframe
 from chanedge.domain.records import (
     DecisionRecord,
@@ -32,16 +42,42 @@ _TOP = 20
 _DEFAULT_WINDOWS = {Timeframe.M15: 1500, Timeframe.H1: 1000, Timeframe.H4: 500}
 
 
+class BacktestInterrupted(RuntimeError):
+    """Raised by stop_after_bars after a checkpoint, so tests can resume like a crash."""
+
+
 @dataclass(frozen=True)
 class BacktestResult:
     run_id: str
     directory: Path
-    decisions: tuple[DecisionRecord, ...]
+    decisions: Sequence[DecisionRecord]
     fills: tuple[FillRecord, ...]
     cash: Decimal
     synchronous: int
     chart_frames: int
     incomplete: bool = False
+
+
+@dataclass
+class _Progress:
+    """Everything after the last checkpoint that a resumed run needs."""
+
+    run_id: str
+    fingerprint: dict
+    cursor: datetime | None = None
+    bars_done: int = 0
+    elapsed_ms: int = 0
+    fills: list = field(default_factory=list)
+    overlaps: list = field(default_factory=list)
+    equity: list = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
+    seeds: dict = field(default_factory=dict)
+    fee_drag: Decimal = Decimal("0")
+    inferred: int = 0
+    exposure: int = 0
+    research: ResearchTracker = field(default_factory=ResearchTracker)
+    stats: DecisionStats | None = None
+    shadow: ShadowBook = field(default_factory=ShadowBook)
 
 
 def run_backtest(
@@ -77,57 +113,76 @@ def run_backtest(
     full_log: bool = False,
     windows: dict[Timeframe, int] | None = None,
     halt_on=None,
+    resume: Path | None = None,
+    checkpoint_bars: int = 96,
+    stop_after_bars: int | None = None,
 ) -> BacktestResult:
+    """Bars are read a window at a time and only for symbols in play, and every
+    checkpoint_bars committed bars the run state is saved next to the report.
+    resume points at that report directory and continues after the checkpoint;
+    the outputs match a run that was never interrupted.
+    """
     del initial_equity  # the broker already replayed or seeded cash
     limits = dict(_DEFAULT_WINDOWS if windows is None else windows)
-    store = {
-        timeframe: {symbol: _Series(bar_source.load(symbol, timeframe)) for symbol in symbols}
-        for timeframe in Timeframe
-    }
-    times = _decision_times(
-        {symbol: series.bars for symbol, series in store[Timeframe.M15].items()},
-        history_start,
-        history_end,
-        refresh_minute,
-    )
+    source = bar_source if hasattr(bar_source, "index") else _EagerSource(bar_source)
+    times = _times_from_source(source, symbols, history_start, history_end, refresh_minute)
     boards = _preload(universe_source, times, refresh_minute)
-    started_at = clock.now()
-    run_id = _run_id(
-        config_hash=config_hash,
-        engine_version=engine_version,
-        feature_version=feature_version,
-        marketdata_version=marketdata_version,
-        history_start=history_start,
-        history_end=history_end,
-        started_at=started_at,
-    )
-    directory = report_sink.begin_run(run_id)
+    fingerprint = {
+        "config_hash": config_hash,
+        "engine_version": engine_version,
+        "feature_version": feature_version,
+        "marketdata_version": marketdata_version,
+        "history_start": history_start.isoformat(),
+        "history_end": history_end.isoformat(),
+    }
+    if resume is None:
+        run_id = _run_id(
+            config_hash=config_hash,
+            engine_version=engine_version,
+            feature_version=feature_version,
+            marketdata_version=marketdata_version,
+            history_start=history_start,
+            history_end=history_end,
+            started_at=clock.now(),
+        )
+        directory = report_sink.begin_run(run_id)
+        progress = _Progress(run_id=run_id, fingerprint=fingerprint, seeds=_seeds(broker))
+        progress.stats = DecisionStats(jev_weights)
+    else:
+        directory = report_sink.resume_run(resume)
+        saved = _load_checkpoint(directory)
+        progress = saved["progress"]
+        if progress.fingerprint != fingerprint:
+            raise ValueError("checkpoint was written with other settings or versions; start a new run")
+        broker.__dict__.update(saved["broker"])
+        report_sink.restore_point(saved["point"])
+        run_id = progress.run_id
     if "chanedge.sqlite" in directory.parts or (directory / "chanedge.sqlite").exists():
         raise ValueError("report directory is not the paper database")
-    shadow = ShadowBook()
+    stats = progress.stats
+    research = progress.research
+    shadow = progress.shadow
+    cache = _BarCache(source, limits)
     previous: dict[str, dict] = {}
-    # Slim copies only: a full PipelineResult keeps its context and 15m snapshot,
-    # about 1 MiB each, which a multi-year run cannot hold in memory.
-    results = []
-    fills: list[FillRecord] = []
-    overlaps: list[float] = []
-    research = ResearchTracker()
-    equity: list[dict] = []
-    meta: dict[str, dict] = {}
-    seeds = _seeds(broker)
-    fee_drag = Decimal("0")
-    inferred = 0
-    exposure = 0
-    started = time.perf_counter()
+    can_checkpoint = hasattr(report_sink, "save_point") and checkpoint_bars > 0
+    started = time.perf_counter() - progress.elapsed_ms / 1000
     halted = False
+    since_checkpoint = 0
     for decision_time in times:
+        if progress.cursor is not None and decision_time <= progress.cursor:
+            continue
         day = _universe_date(decision_time, refresh_minute)
         board = boards[day]
-        marks = _marks(store[Timeframe.M15], decision_time)
+        in_play = set(board) | set(broker.open_symbols()) | set(broker.pending_symbols()) | shadow.active_symbols()
+        cache.retain(in_play)
+        for symbol in [name for name in previous if name not in in_play]:
+            del previous[symbol]
+        # Pending entries fill at this bar's open, so they need a mark as well.
+        marks = _marks(cache, set(broker.open_symbols()) | set(broker.pending_symbols()), decision_time)
         flattened: set[str] = set()
         match_names = set(broker.open_symbols()) | set(broker.pending_symbols()) | shadow.active_symbols()
         for symbol in sorted(match_names):
-            bar = _at(store[Timeframe.M15], symbol, decision_time)
+            bar = cache.at(symbol, decision_time)
             if bar is None:
                 continue
             was_open = broker.position(symbol) is not None
@@ -145,15 +200,15 @@ def run_backtest(
                 flattened.add(symbol)
             shadow.match(symbol, bar, fee_bps=fee_bps, slippage_bps=slippage_bps)
         if broker.open_symbols():
-            exposure += 1
-        jobs = _jobs(broker, shadow, board, store[Timeframe.M15], decision_time, flattened)
+            progress.exposure += 1
+        jobs = _jobs(broker, shadow, board, lambda name: cache.at(name, decision_time) is not None, flattened)
         effective = effective_positions(broker)
         sequence = 0
         bar_decisions: list[DecisionRecord] = []
         for group, symbol, is_flat in jobs:
             account = _view(broker, effective, marks)
             request_bars = {
-                timeframe: _windowed(store[timeframe], symbol, decision_time, limits[timeframe])
+                timeframe: cache.window(symbol, timeframe, decision_time, limits[timeframe])
                 for timeframe in Timeframe
             }
             recorded = group != "shadow"
@@ -192,16 +247,19 @@ def run_backtest(
             if halt_on is not None and halt_on(result):
                 halted = True
             if result.snapshots:
-                merged = dict(previous.get(symbol, {}))
-                merged.update(result.snapshots)
-                previous[symbol] = merged
+                # Only 1H and 4H are reused; a 15m window slides every bar.
+                kept = {timeframe: snap for timeframe, snap in result.snapshots.items() if timeframe is not Timeframe.M15}
+                if kept:
+                    merged = dict(previous.get(symbol, {}))
+                    merged.update(kept)
+                    previous[symbol] = merged
                 snap = result.snapshots.get(Timeframe.M15)
                 if snap is not None:
                     research.observe(symbol, snap)
             for (key, _item), review in zip(open_shadows, result.shadow_reviews):
                 shadow.apply_review(key, review, result.bar_close, decision_time)
             if recorded:
-                results.append(_slim_result(result))
+                stats.add(result)
                 bar_decisions.append(result.decision)
                 if result.amend is not None:
                     broker.amend(
@@ -212,55 +270,61 @@ def run_backtest(
                         updated_at=decision_time,
                     )
                 effective = _apply_effective(effective, result)
-                _remember(meta, overlaps, research, shadow, shadow_sizer, result, decision_time)
+                _remember(progress.meta, progress.overlaps, research, shadow, shadow_sizer, result, decision_time)
                 if halted:
                     break
             elif halted:
                 break
         flush = broker.take_flush()
-        report_sink.commit_bar(
-            _commit(tuple(bar_decisions), flush)
-        )
+        report_sink.commit_bar(_commit(tuple(bar_decisions), flush))
         for fill in flush.fills:
-            fills.append(fill)
-            fee_drag += fill.fee_quote
-            source = instruments.get(fill.symbol)
-            if source is not None and source.instrument_source is InstrumentSource.INFERRED:
-                inferred += 1
-        equity.append(
+            progress.fills.append(fill)
+            progress.fee_drag += fill.fee_quote
+            source_spec = instruments.get(fill.symbol)
+            if source_spec is not None and source_spec.instrument_source is InstrumentSource.INFERRED:
+                progress.inferred += 1
+        progress.equity.append(
             {
                 "time": decision_time.isoformat(),
                 "equity": format(_view(broker, list(broker.open_positions()), marks).equity_quote, ".8f"),
                 "cash": format(broker.cash, ".8f"),
             }
         )
+        progress.cursor = decision_time
+        progress.bars_done += 1
         if halted:
             break
+        since_checkpoint += 1
+        if can_checkpoint and since_checkpoint >= checkpoint_bars:
+            progress.elapsed_ms = int((time.perf_counter() - started) * 1000)
+            _save_checkpoint(directory, progress, broker, report_sink.save_point())
+            since_checkpoint = 0
+            if stop_after_bars is not None and progress.bars_done >= stop_after_bars:
+                raise BacktestInterrupted(f"stopped after {progress.bars_done} bars")
     shadow.finish()
-    trades = build_trades(fills, meta, seeds, instruments)
+    trades = build_trades(progress.fills, progress.meta, progress.seeds, instruments)
     missing = attach_funding(trades, funding_source)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    count = len(results)
+    count = stats.count
     summary = build_summary(
-        decisions=results,
+        stats=stats,
         trades=trades,
-        overlaps=overlaps,
+        overlaps=progress.overlaps,
         research=research,
-        weights=jev_weights,
         overlap_peak=overlap_peak,
         overlap_width=overlap_width,
         overlap_penalty_above=overlap_penalty_above,
         missing_funding_months=missing,
-        fee_drag=fee_drag,
-        exposure_bars=exposure,
-        equity=equity,
-        inferred_fill_count=inferred,
+        fee_drag=progress.fee_drag,
+        exposure_bars=progress.exposure,
+        equity=progress.equity,
+        inferred_fill_count=progress.inferred,
     )
     write_report(
         directory,
         trades=trades,
         shadows=list(shadow.rows),
-        equity=equity,
+        equity=progress.equity,
         summary=summary,
         timing={
             "elapsed_ms": elapsed_ms,
@@ -268,16 +332,47 @@ def run_backtest(
             "mean_decision_ms": 0.0 if count == 0 else elapsed_ms / count,
         },
     )
+    (directory / _CHECKPOINT).unlink(missing_ok=True)
+    decisions = report_sink.decisions() if hasattr(report_sink, "decisions") else ()
     return BacktestResult(
         run_id=run_id,
         directory=directory,
-        decisions=tuple(item.decision for item in results),
-        fills=tuple(fills),
+        decisions=decisions,
+        fills=tuple(progress.fills),
         cash=broker.cash,
         synchronous=report_sink.synchronous(),
         chart_frames=report_sink.chart_frame_count(),
         incomplete=halted,
     )
+
+
+_CHECKPOINT = "checkpoint.pkl"
+# Broker fields that hold a connection; the resumed broker keeps its own.
+_LIVE_FIELDS = frozenset({"_ledger"})
+
+
+def _save_checkpoint(directory: Path, progress: _Progress, broker, point: dict) -> None:
+    """pickle, written to a tmp file and renamed, so a crash mid-write keeps the last one.
+    Only load checkpoints this program wrote: unpickling runs code from the file."""
+    state = {key: value for key, value in broker.__dict__.items() if key not in _LIVE_FIELDS}
+    payload = pickle.dumps({"progress": progress, "broker": state, "point": point})
+    target = directory / _CHECKPOINT
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_bytes(payload)
+    os.replace(tmp, target)
+
+
+def _load_checkpoint(directory: Path) -> dict:
+    path = directory / _CHECKPOINT
+    if not path.is_file():
+        raise FileNotFoundError(f"no checkpoint in {directory}; nothing to resume")
+    return pickle.loads(path.read_bytes())
+
+
+def checkpoint_end(directory: Path) -> date:
+    """history_end the interrupted run was started with, so resume needs no --end."""
+    progress = _load_checkpoint(Path(directory))["progress"]
+    return date.fromisoformat(progress.fingerprint["history_end"])
 
 
 def _commit(decisions, flush):
@@ -349,55 +444,115 @@ def _defending_atr(plan, candidate) -> Decimal | None:
     return quantize(distance / quantize(plan.atr))
 
 
-def _slim_result(result):
-    """What the summary and the returned decisions read. Context, snapshots, and features are dropped."""
-    return result.model_copy(
-        update={
-            "context": None,
-            "snapshots": {},
-            "features": None,
-            "decision": result.decision.model_copy(update={"feature_json": None}),
-        }
-    )
+class _EagerSource:
+    """Adapter for a bar source that only has load(); it keeps every bar it loads."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self._bars: dict[tuple[str, Timeframe], tuple] = {}
+
+    def _all(self, symbol: str, timeframe: Timeframe):
+        key = (symbol, timeframe)
+        if key not in self._bars:
+            loaded = (bar for bar in self._inner.load(symbol, timeframe) if bar.is_closed)
+            self._bars[key] = tuple(sorted(loaded, key=lambda bar: bar.close_time))
+        return self._bars[key]
+
+    def index(self, symbol: str, timeframe: Timeframe):
+        return [_millis(bar.close_time) for bar in self._all(symbol, timeframe)]
+
+    def rows(self, symbol: str, timeframe: Timeframe, lo: int, hi: int):
+        return self._all(symbol, timeframe)[lo:hi]
+
+    def release(self, symbol: str) -> None:
+        for timeframe in Timeframe:
+            self._bars.pop((symbol, timeframe), None)
 
 
-class _Series:
-    """Closed bars of one symbol and timeframe, indexed by close_time."""
+class _LazySeries:
+    """One symbol and timeframe. Holds the close-time index and a slice of Bars:
+    the window behind the current bar plus about 30 days ahead."""
 
-    def __init__(self, bars) -> None:
-        self.bars = tuple(sorted((bar for bar in bars if bar.is_closed), key=lambda bar: bar.close_time))
-        self.closes = [bar.close_time for bar in self.bars]
-        self.by_close = {bar.close_time: bar for bar in self.bars}
+    def __init__(self, source, symbol: str, timeframe: Timeframe, lookback: int) -> None:
+        self._source = source
+        self._symbol = symbol
+        self._timeframe = timeframe
+        self._closes = source.index(symbol, timeframe)
+        self._lookback = lookback
+        self._ahead = _AHEAD_DAYS * 24 * 60 // int(timeframe_duration(timeframe).total_seconds() // 60)
+        self._bars: tuple = ()
+        self._lo = 0
+        self._hi = 0
+
+    def _end(self, decision_time: datetime) -> int:
+        """Rows [0, end) close at or before decision_time; [end - lookback, end) is loaded."""
+        end = bisect_right(self._closes, _millis(decision_time))
+        start = max(0, end - self._lookback)
+        if start < self._lo or end > self._hi or (end and not self._bars):
+            self._lo = start
+            self._hi = min(len(self._closes), end + self._ahead)
+            self._bars = tuple(self._source.rows(self._symbol, self._timeframe, self._lo, self._hi))
+        return end
 
     def at(self, decision_time: datetime):
-        return self.by_close.get(decision_time)
-
-    def window(self, decision_time: datetime, limit: int):
-        end = bisect_right(self.closes, decision_time)
-        if limit < 1:
-            return self.bars[:end]
-        return self.bars[max(0, end - limit) : end]
+        end = self._end(decision_time)
+        if end and self._closes[end - 1] == _millis(decision_time):
+            return self._bars[end - 1 - self._lo]
+        return None
 
     def last_at_or_before(self, decision_time: datetime):
-        end = bisect_right(self.closes, decision_time)
-        return None if end == 0 else self.bars[end - 1]
+        end = self._end(decision_time)
+        return self._bars[end - 1 - self._lo] if end else None
+
+    def window(self, decision_time: datetime, limit: int):
+        end = self._end(decision_time)
+        start = max(self._lo, end - limit)
+        return self._bars[start - self._lo : end - self._lo]
 
 
-_EMPTY = _Series(())
+class _BarCache:
+    """Series for the symbols in play. retain() drops the rest and their memory."""
+
+    def __init__(self, source, limits: dict[Timeframe, int]) -> None:
+        self._source = source
+        self._limits = limits
+        self._series: dict[tuple[str, Timeframe], _LazySeries] = {}
+
+    def _get(self, symbol: str, timeframe: Timeframe) -> _LazySeries:
+        key = (symbol, timeframe)
+        found = self._series.get(key)
+        if found is None:
+            found = _LazySeries(self._source, symbol, timeframe, max(1, self._limits[timeframe]))
+            self._series[key] = found
+        return found
+
+    def at(self, symbol: str, decision_time: datetime):
+        return self._get(symbol, Timeframe.M15).at(decision_time)
+
+    def last_at_or_before(self, symbol: str, decision_time: datetime):
+        return self._get(symbol, Timeframe.M15).last_at_or_before(decision_time)
+
+    def window(self, symbol: str, timeframe: Timeframe, decision_time: datetime, limit: int):
+        return self._get(symbol, timeframe).window(decision_time, limit)
+
+    def retain(self, symbols: set[str]) -> None:
+        dropped = {symbol for symbol, _timeframe in self._series if symbol not in symbols}
+        for symbol in dropped:
+            for timeframe in Timeframe:
+                self._series.pop((symbol, timeframe), None)
+            release = getattr(self._source, "release", None)
+            if release is not None:
+                release(symbol)
 
 
-def _at(series_by_symbol, symbol: str, decision_time: datetime):
-    return series_by_symbol.get(symbol, _EMPTY).at(decision_time)
+_AHEAD_DAYS = 30
 
 
-def _windowed(series_by_symbol, symbol: str, decision_time: datetime, limit: int):
-    return series_by_symbol.get(symbol, _EMPTY).window(decision_time, limit)
+def _millis(moment: datetime) -> int:
+    return int(moment.timestamp() * 1000)
 
 
-def _jobs(broker, shadow, board, bars, decision_time, flattened: set[str]):
-    def has_bar(symbol: str) -> bool:
-        return _at(bars, symbol, decision_time) is not None
-
+def _jobs(broker, shadow, board, has_bar, flattened: set[str]):
     open_names = [symbol for symbol in broker.open_symbols() if has_bar(symbol)]
     dropped = sorted(symbol for symbol in open_names if symbol not in board)
     ranked = sorted((board[symbol], symbol) for symbol in open_names if symbol in board)
@@ -554,23 +709,25 @@ def _preload(source, times, refresh_minute: int) -> dict[date, dict[str, int]]:
     return boards
 
 
-def _decision_times(bars_by_symbol, history_start: date, history_end: date, refresh_minute: int):
-    found: set[datetime] = set()
-    for bars in bars_by_symbol.values():
-        for bar in bars:
-            if not bar.is_closed:
-                continue
-            day = _universe_date(bar.close_time, refresh_minute)
-            if history_start <= day <= history_end:
-                found.add(bar.close_time)
-    return tuple(sorted(found))
+def _times_from_source(source, symbols, history_start: date, history_end: date, refresh_minute: int):
+    """Every 15m close whose universe_date is in range, from the close-time index alone."""
+    shift = refresh_minute * 60 * 1000
+    first = _millis(datetime(history_start.year, history_start.month, history_start.day, tzinfo=_UTC)) + shift
+    after = _millis(datetime(history_end.year, history_end.month, history_end.day, tzinfo=_UTC) + timedelta(days=1)) + shift
+    found: set[int] = set()
+    for symbol in symbols:
+        found.update(value for value in source.index(symbol, Timeframe.M15) if first <= value < after)
+        release = getattr(source, "release", None)
+        if release is not None:
+            release(symbol)
+    return tuple(datetime.fromtimestamp(value / 1000, tz=_UTC) for value in sorted(found))
 
 
-def _marks(series_by_symbol, decision_time: datetime) -> dict[str, float]:
+def _marks(cache, symbols, decision_time: datetime) -> dict[str, float]:
     """Last closed price at or before decision_time. A missing bar does not drop the mark."""
     marks = {}
-    for symbol, series in series_by_symbol.items():
-        bar = series.last_at_or_before(decision_time)
+    for symbol in symbols:
+        bar = cache.last_at_or_before(symbol, decision_time)
         if bar is not None:
             marks[symbol] = bar.close
     return marks

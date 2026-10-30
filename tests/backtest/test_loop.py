@@ -536,6 +536,7 @@ def _drive(
     quality=None,
     with_source: bool = False,
     halt_on=None,
+    **extra,
 ):
     names = symbols
     if names is None:
@@ -584,6 +585,7 @@ def _drive(
         },
         quality=quality,
         halt_on=halt_on,
+        **extra,
     )
     if with_source:
         return result, engine, sink, source
@@ -801,12 +803,118 @@ def test_backtest_quality_vetoes_a_gapped_window(tmp_path: Path) -> None:
     assert "stale_data" not in [veto["code"] for veto in rules["vetoes"]]
 
 
+def _walk(symbol: str, count: int) -> list[Bar]:
+    """count 15m bars from T0; bar 20 trades through 99 and stops a long out."""
+    rows = []
+    for index in range(count):
+        low = 97.0 if index == 20 else 99.5
+        rows.append(_candle(symbol, Timeframe.M15, T0 + timedelta(minutes=15 * index), low=low, close=100.0 + index % 3 * 0.1))
+    return rows
+
+
+def _report(result) -> dict:
+    directory = result.directory
+    return {
+        "decisions": [(item.decision_id, item.action, item.reason_chain_json) for item in result.decisions],
+        "fills": [(fill.client_order_id, fill.price, fill.qty, fill.exit_reason) for fill in result.fills],
+        "trades": pq.read_table(directory / "trades.parquet").to_pylist(),
+        "shadows": pq.read_table(directory / "shadows.parquet").to_pylist(),
+        "equity": pq.read_table(directory / "equity.parquet").to_pylist(),
+        "summary": json.loads((directory / "summary.json").read_text(encoding="utf-8")),
+        "cash": result.cash,
+    }
+
+
+def test_an_interrupted_run_resumes_to_the_same_report(tmp_path: Path) -> None:
+    from chanedge.backtest.loop import BacktestInterrupted, checkpoint_end
+
+    symbols = ("AAA/USDT", "BBB/USDT")
+    bars = [bar for symbol in symbols for bar in (*_higher(symbol), *_walk(symbol, 40))]
+    board = {DAY: (_name("AAA/USDT", 1), _name("BBB/USDT", 2))}
+    signals = {
+        ("AAA/USDT", T0 + timedelta(minutes=15 * 6)): _signal("AAA/USDT", T0 + timedelta(minutes=15 * 6)),
+        ("BBB/USDT", T0 + timedelta(minutes=15 * 25)): _signal("BBB/USDT", T0 + timedelta(minutes=15 * 25)),
+    }
+    whole, _engine, _sink = _drive(tmp_path / "whole", bars, board, signals=signals)
+    assert whole.fills
+
+    with pytest.raises(BacktestInterrupted):
+        _drive(tmp_path / "cut", bars, board, signals=signals, checkpoint_bars=7, stop_after_bars=14)
+    (directory,) = [path for path in (tmp_path / "cut").iterdir() if path.is_dir()]
+    assert (directory / "checkpoint.pkl").is_file()
+    assert checkpoint_end(directory) == DAY
+    resumed, _engine, _sink = _drive(tmp_path / "cut", bars, board, signals=signals, resume=directory)
+    assert not (directory / "checkpoint.pkl").exists()
+    assert len(resumed.decisions) == len(whole.decisions)
+    assert _report(resumed) == _report(whole)
+
+
+def test_equity_marks_an_entry_on_the_bar_it_fills(tmp_path: Path) -> None:
+    symbol = "BTC/USDT"
+    bars = [*_higher(symbol), *_walk(symbol, 12)]
+    signal_time = T0 + timedelta(minutes=15 * 7)
+    result, _engine, _sink = _drive(
+        tmp_path / "reports", bars, {DAY: (_name(symbol, 1),)}, signals={(symbol, signal_time): _signal(symbol, signal_time)}
+    )
+    entry = result.fills[0]
+    rows = pq.read_table(result.directory / "equity.parquet").to_pylist()
+    (row,) = [item for item in rows if item["time"] == (entry.fill_time + timedelta(minutes=15)).isoformat()]
+    # Bar 7 opens at 100.0 and closes at 100.1.
+    assert Decimal(row["equity"]) == Decimal(row["cash"]) + entry.qty * Decimal("0.1")
+
+
+def test_resume_refuses_a_checkpoint_from_other_versions(tmp_path: Path) -> None:
+    from chanedge.backtest.loop import BacktestInterrupted
+
+    symbol = "BTC/USDT"
+    bars = [*_higher(symbol), *_walk(symbol, 12)]
+    board = {DAY: (_name(symbol, 1),)}
+    with pytest.raises(BacktestInterrupted):
+        _drive(tmp_path / "cut", bars, board, checkpoint_bars=4, stop_after_bars=4)
+    (directory,) = [path for path in (tmp_path / "cut").iterdir() if path.is_dir()]
+    with pytest.raises(ValueError, match="other settings"):
+        _drive(tmp_path / "cut", bars, board, resume=directory, versions=("other", FEATURE, MARKET))
+
+
+def test_lazy_windows_match_the_whole_series() -> None:
+    from chanedge.backtest.loop import _BarCache, _EagerSource
+
+    symbol = "BTC/USDT"
+    count = 3200  # more than the 30 days loaded ahead
+    bars = _walk(symbol, count)
+
+    class Paged(_EagerSource):
+        def __init__(self, inner) -> None:
+            super().__init__(inner)
+            self.reads: list[int] = []
+
+        def rows(self, symbol, timeframe, lo, hi):
+            self.reads.append(hi - lo)
+            return super().rows(symbol, timeframe, lo, hi)
+
+    source = Paged(MapBars(bars))
+    cache = _BarCache(source, {Timeframe.M15: 50, Timeframe.H1: 10, Timeframe.H4: 10})
+    for index in range(count):
+        moment = bars[index].close_time
+        assert cache.window(symbol, Timeframe.M15, moment, 50) == tuple(bars[max(0, index - 49) : index + 1])
+        assert cache.at(symbol, moment) == bars[index]
+        assert cache.at(symbol, moment + timedelta(minutes=1)) is None
+    assert len(source.reads) == 2
+    assert max(source.reads) < count
+    cache.retain(set())
+    assert cache.window(symbol, Timeframe.M15, bars[-1].close_time, 3) == tuple(bars[-3:])
+
+
 def test_marks_use_the_last_close_when_the_decision_bar_is_missing() -> None:
-    from chanedge.backtest.loop import _marks, _Series
+    from chanedge.backtest.loop import _BarCache, _EagerSource, _DEFAULT_WINDOWS, _marks
+
+    class _Bars:
+        def load(self, symbol, timeframe):
+            return [earlier] if timeframe is Timeframe.M15 else []
 
     symbol = "BTC/USDT"
     earlier = _candle(symbol, Timeframe.M15, T0 - timedelta(minutes=15), close=104.0, high=105.0)
-    marks = _marks({symbol: _Series([earlier])}, T15)
+    marks = _marks(_BarCache(_EagerSource(_Bars()), _DEFAULT_WINDOWS), [symbol], T15)
     assert marks == {symbol: 104.0}
 
 
