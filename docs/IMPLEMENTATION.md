@@ -2,7 +2,7 @@
 
 這份告訴工程師每個 PR 要建立哪些檔、函式按什麼順序寫、測試先鎖哪幾條。交易規則、預設數字、夾具期望都以 `docs/ARCHITECTURE.md` 為準。兩份不一致時，改這份，不改架構稿裡已經鎖定的句子。
 
-日期對齊架構稿：2026-10-28。倉庫在撰寫這份計畫時還沒有交易程式。狀態是 Draft。交易規則在 2026-10-29 核過，沒有 critical 或 major。PR-1 已完成（設定載入與 config_hash）。PR-2 已完成（領域型別與 id）。PR-3 已完成（行情、榜單、缺口、小數推估）。PR-4 已完成（日誌結構）。PR-5 已完成（纏論引擎，不含買賣點）。PR-6 已完成（二買、三買與對稱賣點）。PR-7 已完成（六通道特徵）。PR-8 已完成（JEV 加權評分）。PR-9 已完成（硬閘門）。PR-10 已完成（風險）。PR-11 已完成（管線、撮合、回測）。PR-12 已完成（CLI、紙交易、重啟）。System One 進場路徑已接入（預檢、映射、JSONL、`jev-warm`、快取未命中退出碼 3）。`config/default.yaml` 與 `config/paper.yaml` 沒有把 `systemone.enabled` 打開。PR-13 還沒開始。
+日期對齊架構稿：2026-10-28。倉庫在撰寫這份計畫時還沒有交易程式。狀態是 Draft。交易規則在 2026-10-29 核過，沒有 critical 或 major。PR-1 已完成（設定載入與 config_hash）。PR-2 已完成（領域型別與 id）。PR-3 已完成（行情、榜單、缺口、小數推估）。PR-4 已完成（日誌結構）。PR-5 已完成（纏論引擎，不含買賣點）。PR-6 已完成（二買、三買與對稱賣點）。PR-7 已完成（六通道特徵）。PR-8 已完成（JEV 加權評分）。PR-9 已完成（硬閘門）。PR-10 已完成（風險）。PR-11 已完成（管線、撮合、回測）。PR-12 已完成（CLI、紙交易、重啟）。System One 進場路徑已接入（預檢、映射、JSONL、`jev-warm`、快取未命中退出碼 3）。`config/default.yaml` 與 `config/paper.yaml` 沒有把 `systemone.enabled` 打開。2026-10-29 程式審查的問題已修正（見架構稿狀態列）。PR-13 已完成：`chanedge monitor`、`src/chanedge/monitor/`、`tests/monitor/test_reads_frames.py`，Lightweight Charts 4.2.3 已核對 Apache-2.0 並放在 `monitor/static/`。
 
 本輪相對上一份計畫，只加工程做法，不改進出場：
 

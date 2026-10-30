@@ -6,9 +6,9 @@ ChanEdge 是一套自用的量化系統。結構由纏論引擎負責。硬規�
 
 ## 三個階段
 
-Phase 1 的產品範圍是紙交易、事件回測、稽核日誌，以及把 `ChartFrame` 寫進 SQLite。完成定義在架構稿 §11.1，對照句在實作計畫「做完 Phase 1 的對照」。Phase 1 不送實盤單，不開繪圖埠，不接 Telegram。System One 進場路徑已在樹上，預設 `systemone.enabled` 仍是 false。PR-13 還沒開始。
+Phase 1 的產品範圍是紙交易、事件回測、稽核日誌，以及把 `ChartFrame` 寫進 SQLite。完成定義在架構稿 §11.1，對照句在實作計畫「做完 Phase 1 的對照」。Phase 1 不送實盤單，不開繪圖埠，不接 Telegram。System One 進場路徑已在樹上，預設 `systemone.enabled` 仍是 false。
 
-Phase 2 從 PR-13 開始，是唯讀圖形監控。畫面只讀已經寫好的幀，不呼叫 `ChanEngine`，沒有下單路由。`src/chanedge/monitor/__init__.py` 目前只有說明。`tests/monitor/` 還沒有。使用者沒有說要做之前，停在這裡。
+Phase 2 從 PR-13 開始，是唯讀圖形監控。畫面只讀已經寫好的幀，不呼叫 `ChanEngine`，沒有下單路由。PR-13 已完成：`chanedge monitor` 啟動另一個行程 `python -m chanedge.monitor`，只綁 `127.0.0.1`，經 `journal/reader.py` 以唯讀連線讀 `chart_frames`，只接受 GET／HEAD。測試在 `tests/monitor/test_reads_frames.py`。
 
 Phase 3 才是 Telegram 與實盤。告警事件與實盤進入條件在 §11.3。組合根遇到 `mode=live` 直接失敗，而且失敗在讀取 API 金鑰之前。倉庫裡沒有可送單的 `execution/live.py`。
 

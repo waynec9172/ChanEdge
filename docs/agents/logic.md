@@ -224,7 +224,7 @@ flowchart TD
 | `backtest` | 撮合、回測迴圈、報告。只接收注入的 `run_pipeline` 與 `SystemOneReader` |
 | `journal` | 決策、訂單、成交、持倉、現金、`ChartFrame` |
 | `app` | 組合、CLI、紙交易迴圈、預檢順序、`jev-warm`、把埠注入回測 |
-| `monitor` | Phase 2 才讀幀畫圖。現在只有說明 |
+| `monitor` | Phase 2 唯讀網頁（PR-13 已完成）。只讀幀畫圖，不呼叫 `ChanEngine`，沒有下單路由 |
 
 `app` 組裝物件。業務公式不寫在 `app`。`execution` 不 import `journal`。`backtest` 不 import `marketdata`、`journal`、`app` 或 `typesafe`。
 

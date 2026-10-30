@@ -26,8 +26,8 @@
 
 狀態是 Draft。日期是 2026-10-28。不要把 `approve` 寫進狀態列。
 
-PR-1 到 PR-12 已完成。System One 進場路徑已接入，`systemone.enabled` 預設仍是 false。PR-13（唯讀圖形監控）沒有開始。使用者沒有明確說要做 PR-13 之前，不要做網頁、不要綁監控埠、不要加 `execution/live.py`、不要接 Telegram。不要把 `paper.yaml` 的旗標打開。
+PR-1 到 PR-12 已完成。System One 進場路徑已接入，`systemone.enabled` 預設仍是 false。2026-10-29 程式審查的 18 項與幾個收尾問題已修正。PR-13（唯讀圖形監控）在使用者要求下已完成：`chanedge monitor` 另開行程，只綁 `127.0.0.1`，只讀 `chart_frames`。使用者沒有明確說要做之前，不要加 `execution/live.py`、不要接 Telegram、不要讓監控綁其他位址或加任何寫入路由。不要把 `paper.yaml` 的旗標打開。
 
-上次在倉庫的 `.venv` 跑完整測試是 277 passed、12.82 秒（Windows）。2026-10-29 修正審查問題之後，在 Linux、Python 3.13 是 293 passed。這些數字只是當時的結果。審查時自己重跑，以終端機輸出為準。
+上次在倉庫的 `.venv` 跑完整測試是 277 passed、12.82 秒（Windows）。2026-10-29 修正審查問題並完成 PR-13 之後，在 Linux、Python 3.13 是 303 passed。這些數字只是當時的結果。審查時自己重跑，以終端機輸出為準。
 
 沒有使用者要求時不要 commit。
