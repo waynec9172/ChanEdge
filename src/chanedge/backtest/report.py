@@ -56,7 +56,11 @@ def build_trades(
     seeds: dict[str, dict],
     instruments: dict,
 ) -> list[dict]:
-    """Walk fills in time order. A flat quantity closes one trade."""
+    """Walk fills in time order. A flat quantity closes one trade.
+
+    pnl adds every exit leg (TP1 and the final exit) and subtracts every fee,
+    entry included. r_multiple is that pnl over opened qty times the entry R.
+    """
     grouped: dict[str, list[FillRecord]] = {}
     for fill in fills:
         grouped.setdefault(fill.symbol, []).append(fill)
@@ -75,10 +79,10 @@ def build_trades(
             if state is None or not fill.reduce_only:
                 continue
             qty = state["qty"]
-            if qty > _ZERO:
-                qty = quantize(qty - fill.qty)
-            else:
-                qty = quantize(qty + fill.qty)
+            sign = Decimal(1) if qty > _ZERO else Decimal(-1)
+            state["realized"] += (quantize(fill.price) - state["avg"]) * sign * fill.qty
+            state["fees"] += fill.fee_quote
+            qty = quantize(qty - fill.qty) if qty > _ZERO else quantize(qty + fill.qty)
             if fill.partial_reason:
                 partial = fill.partial_reason
             events.append((fill.fill_time, qty, state["avg"]))
@@ -139,8 +143,7 @@ def build_summary(
     decisions: list,
     trades: list[dict],
     overlaps: list[float],
-    signals: list[dict],
-    snapshots: dict[str, ChanSnapshot],
+    research: ResearchTracker,
     weights: dict[str, float],
     overlap_peak: float,
     overlap_width: float,
@@ -151,13 +154,11 @@ def build_summary(
     equity: list[dict],
     inferred_fill_count: int,
 ) -> dict:
-    replaced = _endpoint_ratios(signals, snapshots)
+    tracked = research.summary()
     terms = [_tent(value, overlap_peak, overlap_width) for value in overlaps]
     above = [value for value in overlaps if value > overlap_penalty_above]
     return {
-        "endpoint_replaced_ratio": replaced,
-        "second_buy_reemit_count": _reemit(signals),
-        "inside_low_broke_prior_end": _inside_low(snapshots),
+        **tracked,
         "overlap_term_mean": None if not terms else sum(terms) / len(terms),
         "overlap_penalty_fraction": None if not overlaps else len(above) / len(overlaps),
         "cost_r_by_symbol": _reason_counts(decisions, VetoCode.COST_R.value),
@@ -180,17 +181,23 @@ def build_summary(
 def _seed_state(seed: dict | None) -> dict | None:
     if seed is None:
         return None
+    qty = quantize(seed["qty"])
     return {
-        "qty": quantize(seed["qty"]),
+        "qty": qty,
+        "opened_qty": abs(qty),
         "avg": quantize(seed["avg"]),
         "opened_at": seed["opened_at"],
-        "side": "long" if quantize(seed["qty"]) > _ZERO else "short",
+        "side": "long" if qty > _ZERO else "short",
         "signal_type": seed.get("signal_type"),
         "target_risk_fraction": seed.get("target_risk_fraction"),
         "realized_risk_fraction": seed.get("realized_risk_fraction"),
         "binding_constraint": seed.get("binding_constraint"),
         "cost_r": seed.get("cost_r"),
+        "risk_per_unit": seed.get("risk_per_unit"),
+        "defending_atr": seed.get("defending_atr"),
         "entry_price": quantize(seed["avg"]),
+        "realized": _ZERO,
+        "fees": _ZERO,
     }
 
 
@@ -198,6 +205,7 @@ def _open_state(fill: FillRecord, meta: dict) -> dict:
     qty = fill.qty if fill.side == "buy" else -fill.qty
     return {
         "qty": quantize(qty),
+        "opened_qty": quantize(fill.qty),
         "avg": quantize(fill.price),
         "opened_at": fill.fill_time,
         "side": "long" if qty > _ZERO else "short",
@@ -206,23 +214,25 @@ def _open_state(fill: FillRecord, meta: dict) -> dict:
         "realized_risk_fraction": meta.get("realized_risk_fraction"),
         "binding_constraint": meta.get("binding_constraint"),
         "cost_r": meta.get("cost_r"),
+        "risk_per_unit": meta.get("risk_per_unit"),
+        "defending_atr": meta.get("defending_atr"),
         "entry_price": quantize(fill.price),
+        "realized": _ZERO,
+        "fees": quantize(fill.fee_quote),
     }
 
 
 def _trade_row(symbol, state, fill, partial, events, instrument_source) -> dict:
-    entry = state["entry_price"]
-    side = state["side"]
-    sign = Decimal(1) if side == "long" else Decimal(-1)
-    pnl = (quantize(fill.price) - entry) * sign * abs(state["qty"] if state["qty"] != _ZERO else fill.qty)
-    # state qty was just moved to zero; the closed quantity is the fill when it flattens the remainder.
-    closed_qty = fill.qty
-    pnl = (quantize(fill.price) - entry) * sign * closed_qty
+    pnl = quantize(state["realized"] - state["fees"])
+    risk = state.get("risk_per_unit")
+    r_multiple = None
+    if risk is not None and Decimal(risk) > _ZERO and state["opened_qty"] > _ZERO:
+        r_multiple = format(quantize(pnl / (Decimal(risk) * state["opened_qty"])), ".8f")
     return {
         "symbol": symbol,
-        "side": side,
-        "qty": format(closed_qty, ".8f"),
-        "entry_price": format(entry, ".8f"),
+        "side": state["side"],
+        "qty": format(state["opened_qty"], ".8f"),
+        "entry_price": format(state["entry_price"], ".8f"),
         "exit_price": format(fill.price, ".8f"),
         "entry_time": state["opened_at"].isoformat(),
         "exit_time": fill.fill_time.isoformat(),
@@ -232,11 +242,13 @@ def _trade_row(symbol, state, fill, partial, events, instrument_source) -> dict:
         "realized_risk_fraction": _text(state["realized_risk_fraction"]),
         "binding_constraint": state["binding_constraint"],
         "cost_r": _text(state["cost_r"]),
+        "defending_atr": _text(state.get("defending_atr")),
         "instrument_source": instrument_source,
         "funding_estimate_quote": None,
         "partial_reason": partial,
-        "pnl": format(quantize(pnl), ".8f"),
-        "r_multiple": None,
+        "fee_quote": format(quantize(state["fees"]), ".8f"),
+        "pnl": format(pnl, ".8f"),
+        "r_multiple": r_multiple,
         "_entry_at": state["opened_at"],
         "_exit_at": fill.fill_time,
         "_events": list(events),
@@ -251,51 +263,71 @@ def _qty_before(events, calc_time: datetime):
     return current
 
 
-def _endpoint_ratios(signals: list[dict], snapshots: dict[str, ChanSnapshot]) -> dict[str, float | None]:
-    buckets: dict[str, list[bool]] = {name: [] for name in _SIGNAL_TYPES}
-    for signal in signals:
-        name = signal.get("signal_type")
-        if name not in buckets:
-            continue
-        snapshot = snapshots.get(signal["symbol"])
-        replaced = True
-        if snapshot is not None:
+class ResearchTracker:
+    """Signal and bi statistics gathered from every 15m snapshot during the run.
+
+    The last snapshot alone only covers the final window, and a bi id changes
+    when its endpoint is replaced, so these are tracked as the walk goes.
+    """
+
+    def __init__(self) -> None:
+        self._watch: dict[str, list[dict]] = {}
+        self._replaced: dict[str, list[bool]] = {name: [] for name in _SIGNAL_TYPES}
+        self._second_buys: dict[str, int] = {}
+        self._downs: dict[tuple[str, str], tuple[bool, bool]] = {}
+
+    def add_signal(self, symbol: str, signal_type: str, defending_fx_id: str, bi_key: str | None) -> None:
+        if signal_type in self._replaced:
+            self._watch.setdefault(symbol, []).append(
+                {"type": signal_type, "fx": defending_fx_id, "replaced": False}
+            )
+        if signal_type == SignalType.SECOND_BUY.value and bi_key is not None:
+            self._second_buys[bi_key] = self._second_buys.get(bi_key, 0) + 1
+
+    def observe(self, symbol: str, snapshot: ChanSnapshot) -> None:
+        pending = self._watch.get(symbol)
+        if pending:
+            in_window = {fx.id for fx in snapshot.fenxings}
             ends = {bi.start_fx_id for bi in snapshot.bis} | {bi.end_fx_id for bi in snapshot.bis}
-            replaced = signal.get("defending_fx_id") not in ends
-        buckets[name].append(replaced)
-    return {name: None if not rows else sum(1 for row in rows if row) / len(rows) for name, rows in buckets.items()}
-
-
-def _reemit(signals: list[dict]) -> int:
-    counts: dict[str, int] = {}
-    for signal in signals:
-        if signal.get("signal_type") != SignalType.SECOND_BUY.value:
-            continue
-        bi_id = signal.get("related_bi_id")
-        if not bi_id:
-            continue
-        counts[bi_id] = counts.get(bi_id, 0) + 1
-    return sum(max(0, count - 1) for count in counts.values())
-
-
-def _inside_low(snapshots: dict[str, ChanSnapshot]) -> dict[str, float | int | None]:
-    comparable = 0
-    broken = 0
-    for snapshot in snapshots.values():
+            kept = []
+            for item in pending:
+                if item["fx"] not in in_window:
+                    self._replaced[item["type"]].append(item["replaced"])
+                elif item["fx"] not in ends:
+                    self._replaced[item["type"]].append(True)
+                else:
+                    kept.append(item)
+            self._watch[symbol] = kept
         downs = [bi for bi in snapshot.bis if bi.direction is Direction.DOWN and bi.confirmed]
         downs.sort(key=lambda bi: bi.end_time)
-        for index, bi in enumerate(downs):
-            if index == 0:
-                continue
-            prior = downs[index - 1]
-            comparable += 1
-            if bi.end_price > prior.end_price and bi.low < prior.end_price:
-                broken += 1
-    return {
-        "count": broken,
-        "comparable": comparable,
-        "ratio": None if comparable == 0 else broken / comparable,
-    }
+        for prior, bi in zip(downs, downs[1:]):
+            higher = bi.end_price > prior.end_price
+            self._downs[(symbol, bi.start_fx_id)] = (higher, higher and bi.low < prior.end_price)
+
+    def summary(self) -> dict:
+        for pending in self._watch.values():
+            for item in pending:
+                self._replaced[item["type"]].append(item["replaced"])
+        self._watch = {}
+        distribution: dict[str, int] = {}
+        for count in self._second_buys.values():
+            key = str(count - 1)
+            distribution[key] = distribution.get(key, 0) + 1
+        comparable = sum(1 for higher, _broken in self._downs.values() if higher)
+        broken = sum(1 for _higher, item in self._downs.values() if item)
+        return {
+            "endpoint_replaced_ratio": {
+                name: None if not rows else sum(1 for row in rows if row) / len(rows)
+                for name, rows in self._replaced.items()
+            },
+            "second_buy_reemit_count": sum(max(0, count - 1) for count in self._second_buys.values()),
+            "second_buy_reemit_distribution": dict(sorted(distribution.items(), key=lambda pair: int(pair[0]))),
+            "inside_low_broke_prior_end": {
+                "count": broken,
+                "comparable": comparable,
+                "ratio": None if comparable == 0 else broken / comparable,
+            },
+        }
 
 
 def _reason_counts(decisions: list, code: str) -> dict[str, int]:
@@ -439,8 +471,10 @@ _TRADE_FIELDS = [
     ("instrument_source", pa.string()),
     ("funding_estimate_quote", pa.string()),
     ("partial_reason", pa.string()),
+    ("fee_quote", pa.string()),
     ("pnl", pa.string()),
     ("r_multiple", pa.string()),
+    ("defending_atr", pa.string()),
 ]
 
 _SHADOW_FIELDS = [

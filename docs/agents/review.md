@@ -84,6 +84,8 @@ chanedge = "chanedge.app.cli:main"
 
 共用旗標是 `--config`（預設 `config/default.yaml`）、`--overlay`、`--root`（預設 `.`）、`--vision`、`--end`。`paper` 另有 `--once`。`universe` 另有 `--reconstruct`。
 
+`download`、`universe --reconstruct`、`backtest`、`jev-warm` 只讀本機檔，連不到交易所市場清單時在 stderr 警告，改用 vision CSV 推估規格。只有 `paper` 在讀不到市場清單時直接失敗。
+
 `backtest` 要放行進場必須加 `--overlay config/paper.yaml`：`default.yaml` 的 `safety.kill_switch` 是 true，回測照樣套用，所有進場都會被 `KILL_SWITCH` 否決，報告會沒有成交。這時命令會在 stderr 印警告。
 
 `main` 抓住例外，印出 `str(exc)`，回傳 1。`mode=live` 在組裝之前就失敗。`universe.mode` 為 `pin` 時，`download`、`universe`、`backtest` 回傳 1。紙交易才使用 pin 清單。

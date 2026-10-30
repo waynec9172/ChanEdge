@@ -30,6 +30,8 @@ class _Shadow:
     position: PositionState | None = None
     pending: dict[str, PendingOrder] = field(default_factory=dict)
     arm: float | None = None
+    opened_qty: Decimal = _ZERO
+    realized: Decimal = _ZERO
 
 
 class ShadowBook:
@@ -184,15 +186,18 @@ class ShadowBook:
                 entry_bar_open_time=fill.fill_time,
             )
             row["entry_price"] = format(fill.price, ".8f")
+            shadow.opened_qty = quantize(fill.qty)
             return
         if position is None:
             return
+        sign = Decimal(1) if position.qty > _ZERO else Decimal(-1)
+        shadow.realized += (fill.price - quantize(position.avg_price)) * sign * fill.qty
         if new_qty == _ZERO:
             row["closed"] = True
             row["unfinished"] = False
             row["exit_price"] = format(fill.price, ".8f")
             row["exit_reason"] = None if fill.exit_reason is None else str(fill.exit_reason)
-            row["r_multiple"] = _r(position, fill.price)
+            row["r_multiple"] = _r(position, shadow.realized, shadow.opened_qty)
             self._shadows.pop(shadow.key, None)
             return
         updated = position.model_copy(update={"qty": new_qty, "avg_price": float(new_avg)})
@@ -219,13 +224,12 @@ def _row(symbol: str, signal: ChanSignal, decision_time: datetime, *, qty: str |
     }
 
 
-def _r(position: PositionState, exit_price: Decimal) -> str | None:
+def _r(position: PositionState, realized: Decimal, opened_qty: Decimal) -> str | None:
+    """Every exit leg over opened qty times the entry R. Fees are left out, as in the old column."""
     plan = position.plan
-    if plan.entry_reference is None or plan.structure_stop_price is None:
+    if plan.entry_reference is None or plan.structure_stop_price is None or opened_qty <= _ZERO:
         return None
     distance = abs(quantize(plan.entry_reference) - quantize(plan.structure_stop_price))
     if distance == _ZERO:
         return None
-    sign = Decimal(1) if position.qty > _ZERO else Decimal(-1)
-    pnl = (exit_price - quantize(position.avg_price)) * sign
-    return format(pnl / distance, ".8f")
+    return format(realized / (distance * opened_qty), ".8f")

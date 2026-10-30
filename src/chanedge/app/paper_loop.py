@@ -310,6 +310,9 @@ def reconcile_report(paper_path: Path, directory: Path, backtest_decisions) -> P
     from chanedge.journal.repository import JournalRepository
 
     paper_rows = JournalRepository(paper_path).list_decisions()
+    if not paper_rows:
+        # compose creates an empty ledger file; no paper decisions means no paper run to reconcile.
+        return None
     paper = {row.decision_id: _codes(row.hard_rule_json) for row in paper_rows}
     backtest = {item.decision_id: _codes(item.hard_rule_json) for item in backtest_decisions}
     paper_reasons = {row.decision_id: _reason_codes(row.reason_chain_json) for row in paper_rows}

@@ -958,3 +958,24 @@ def test_backtest_warns_when_the_kill_switch_vetoes_every_entry(tmp_path: Path, 
     overlay = [*base[:4], str(other), *base[5:], "--overlay", str(ROOT / "config" / "paper.yaml")]
     assert main(overlay, exchange=_Exchange(), clock=clock, environ=_Boom()) == 0
     assert "kill_switch" not in capsys.readouterr().err
+
+
+def test_offline_commands_fall_back_when_markets_are_unreachable(tmp_path: Path, capsys) -> None:
+    class _Offline(_Exchange):
+        def load_markets(self):
+            raise OSError("exchangeInfo unreachable")
+
+    app = compose(_quoted_settings(), root=tmp_path, exchange=_Offline(), clock=_Clock(T15), environ=_Boom(), markets_required=False)
+    assert app.instruments == {}
+    assert "inferred" in capsys.readouterr().err
+    with pytest.raises(OSError):
+        compose(_quoted_settings(), root=tmp_path / "paper", exchange=_Offline(), clock=_Clock(T15), environ=_Boom())
+
+
+def test_reconcile_is_skipped_when_the_paper_ledger_has_no_decisions(tmp_path: Path) -> None:
+    from chanedge.journal.repository import JournalRepository
+
+    path = tmp_path / "chanedge.sqlite"
+    JournalRepository(path).close()
+    assert reconcile_report(path, tmp_path / "report", ()) is None
+    assert not (tmp_path / "report" / "reconcile.json").exists()

@@ -80,6 +80,7 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
             network=network,
             api_key=api_key,
             systemone_attempts=attempts,
+            markets_required=args.command == "paper",
         )
         vision = Path(args.vision) if args.vision else app.root
         end = _end(args.end, app.clock.now())

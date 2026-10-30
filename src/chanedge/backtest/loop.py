@@ -14,7 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from chanedge.backtest.matcher import match_bar
-from chanedge.backtest.report import attach_funding, build_summary, build_trades, write_report
+from chanedge.backtest.report import ResearchTracker, attach_funding, build_summary, build_trades, write_report
 from chanedge.backtest.shadow import ShadowBook
 from chanedge.domain.accounting import mark_pnl, quantize
 from chanedge.domain.bars import DataQuality, Instrument
@@ -106,13 +106,12 @@ def run_backtest(
         raise ValueError("report directory is not the paper database")
     shadow = ShadowBook()
     previous: dict[str, dict] = {}
-    latest: dict = {}
     # Slim copies only: a full PipelineResult keeps its context and 15m snapshot,
     # about 1 MiB each, which a multi-year run cannot hold in memory.
     results = []
     fills: list[FillRecord] = []
     overlaps: list[float] = []
-    signals: list[dict] = []
+    research = ResearchTracker()
     equity: list[dict] = []
     meta: dict[str, dict] = {}
     seeds = _seeds(broker)
@@ -198,7 +197,7 @@ def run_backtest(
                 previous[symbol] = merged
                 snap = result.snapshots.get(Timeframe.M15)
                 if snap is not None:
-                    latest[symbol] = snap
+                    research.observe(symbol, snap)
             for (key, _item), review in zip(open_shadows, result.shadow_reviews):
                 shadow.apply_review(key, review, result.bar_close, decision_time)
             if recorded:
@@ -213,7 +212,7 @@ def run_backtest(
                         updated_at=decision_time,
                     )
                 effective = _apply_effective(effective, result)
-                _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_time)
+                _remember(meta, overlaps, research, shadow, shadow_sizer, result, decision_time)
                 if halted:
                     break
             elif halted:
@@ -246,8 +245,7 @@ def run_backtest(
         decisions=results,
         trades=trades,
         overlaps=overlaps,
-        signals=signals,
-        snapshots=latest,
+        research=research,
         weights=jev_weights,
         overlap_peak=overlap_peak,
         overlap_width=overlap_width,
@@ -294,19 +292,14 @@ def _commit(decisions, flush):
     )
 
 
-def _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_time) -> None:
+def _remember(meta, overlaps, research, shadow, shadow_sizer, result, decision_time) -> None:
     if result.group == "entry" and result.features is not None:
         overlaps.append(result.features.structure.consecutive_bi_overlap_ratio)
     if result.group != "entry" or result.candidate is None:
         return
-    signals.append(
-        {
-            "symbol": result.decision.symbol,
-            "signal_type": result.candidate.type.value,
-            "defending_fx_id": result.candidate.defending_fx_id,
-            "related_bi_id": result.candidate.related_bi_id,
-        }
-    )
+    candidate = result.candidate
+    symbol = result.decision.symbol
+    research.add_signal(symbol, candidate.type.value, candidate.defending_fx_id, _bi_key(result, symbol))
     if (
         result.context is None
         or result.features is None
@@ -315,15 +308,45 @@ def _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_ti
     ):
         return
     sized = shadow_sizer(result.context, result.features, result.assessment, result.rules)
-    shadow.open_shadow(result.decision.symbol, sized, result.candidate, decision_time)
+    shadow.open_shadow(symbol, sized, candidate, decision_time)
     if result.submitted and result.plan is not None:
+        plan = result.plan
         meta[result.decision.decision_id] = {
-            "signal_type": result.candidate.type.value,
-            "target_risk_fraction": result.plan.target_risk_fraction,
-            "realized_risk_fraction": result.plan.realized_risk_fraction,
-            "binding_constraint": result.plan.binding_constraint,
-            "cost_r": result.plan.cost_r,
+            "signal_type": candidate.type.value,
+            "target_risk_fraction": plan.target_risk_fraction,
+            "realized_risk_fraction": plan.realized_risk_fraction,
+            "binding_constraint": plan.binding_constraint,
+            "cost_r": plan.cost_r,
+            "risk_per_unit": _risk_per_unit(plan),
+            "defending_atr": _defending_atr(plan, candidate),
         }
+
+
+def _bi_key(result, symbol: str) -> str | None:
+    """A bi id changes when its endpoint is replaced. The start fenxing does not."""
+    context = result.context
+    if context is None:
+        return None
+    for bi in context.snapshots[Timeframe.M15].bis:
+        if bi.id == result.candidate.related_bi_id:
+            return f"{symbol}|{bi.start_fx_id}"
+    return None
+
+
+def _risk_per_unit(plan) -> Decimal | None:
+    if plan.entry_reference is None or plan.structure_stop_price is None:
+        return None
+    return abs(quantize(plan.entry_reference) - quantize(plan.structure_stop_price))
+
+
+def _defending_atr(plan, candidate) -> Decimal | None:
+    """(entry_reference - defending_price) / ATR on the signal bar; the short side mirrors it."""
+    if plan.entry_reference is None or not plan.atr:
+        return None
+    distance = quantize(plan.entry_reference) - quantize(candidate.defending_price)
+    if plan.side is Side.SHORT:
+        distance = -distance
+    return quantize(distance / quantize(plan.atr))
 
 
 def _slim_result(result):
@@ -492,6 +515,8 @@ def _seeds(broker) -> dict[str, dict]:
             "realized_risk_fraction": plan.realized_risk_fraction,
             "binding_constraint": plan.binding_constraint,
             "cost_r": plan.cost_r,
+            "risk_per_unit": _risk_per_unit(plan),
+            "defending_atr": None,
         }
     return seeds
 

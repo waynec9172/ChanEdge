@@ -5,6 +5,7 @@ Live mode fails before an exchange client is built. The monitor port stays close
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,8 +101,14 @@ def compose(
     network: bool = False,
     api_key: str | None = None,
     systemone_attempts: int = 1,
+    markets_required: bool = True,
 ) -> PaperApp:
-    """Wire paper objects. environ is accepted and not read. The API key arrives as api_key."""
+    """Wire paper objects. environ is accepted and not read. The API key arrives as api_key.
+
+    markets_required=False is for commands that only read local files
+    (download, universe --reconstruct, backtest, jev-warm). If the exchange
+    cannot be reached they fall back to specs inferred from the vision CSVs.
+    """
     del environ
     if settings.runtime.mode == "live":
         raise RuntimeError("live mode is not implemented")
@@ -175,11 +182,7 @@ def compose(
         feature_version=FEATURE_VERSION,
         marketdata_version=MARKETDATA_VERSION,
         safety=SafetyState(kill_switch=settings.safety.kill_switch, mode=RuntimeMode.PAPER),
-        instruments=instruments_from_exchange(
-            exchange,
-            settings.runtime.venue,
-            default_leverage=settings.risk.max_leverage,
-        ),
+        instruments=_load_instruments(exchange, settings, required=markets_required),
         log=configure_logging(),
         systemone_reader=reader,
         systemone_client=client,
@@ -193,6 +196,24 @@ def _require_version_pair(settings) -> None:
         raise RuntimeError("systemone.enabled requires jev.version typesafe-v1")
     if not enabled and version != "weighted-v1":
         raise RuntimeError("systemone.enabled false requires jev.version weighted-v1")
+
+
+def _load_instruments(exchange: object, settings, *, required: bool) -> dict[str, Instrument]:
+    try:
+        return instruments_from_exchange(
+            exchange,
+            settings.runtime.venue,
+            default_leverage=settings.risk.max_leverage,
+        )
+    except Exception as exc:
+        if required:
+            raise
+        print(
+            f"warning: exchange markets unavailable ({type(exc).__name__}); "
+            "using instrument specs inferred from the vision CSVs",
+            file=sys.stderr,
+        )
+        return {}
 
 
 def instruments_from_exchange(
