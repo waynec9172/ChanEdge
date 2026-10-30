@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChanEdge Monitor</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>ChanEdge 監控</h1>
+    <span class="tag">唯讀 · 只讀已寫好的幀</span>
+    <span id="updated" class="muted"></span>
+  </header>
+  <main>
+    <section id="board" aria-label="名次">
+      <table>
+        <thead><tr><th>#</th><th>幣種</th><th>4H</th><th>最後動作</th><th>倉</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p id="board-empty" class="muted" hidden>尚無幀</p>
+    </section>
+    <section id="center">
+      <div class="toolbar">
+        <strong id="title">—</strong>
+        <div role="group" aria-label="週期" id="timeframes">
+          <button data-tf="15m" class="active">15m</button>
+          <button data-tf="1h">1H</button>
+          <button data-tf="4h">4H</button>
+        </div>
+        <span id="bias" class="muted"></span>
+      </div>
+      <div id="chart"></div>
+      <p id="no-frame" class="empty" hidden>尚無幀</p>
+    </section>
+    <section id="jev" aria-label="JEV">
+      <h2>JEV</h2>
+      <dl>
+        <dt>提議</dt><dd id="proposed">—</dd>
+        <dt>複合分</dt><dd id="score">—</dd>
+        <dt>否決碼</dt><dd id="vetoes">—</dd>
+      </dl>
+      <table>
+        <thead><tr><th>通道</th><th>adjusted</th></tr></thead>
+        <tbody id="channels"></tbody>
+      </table>
+    </section>
+  </main>
+  <footer class="muted">
+    Charts by <a href="https://www.tradingview.com/" rel="noopener" target="_blank">TradingView Lightweight Charts™</a> (Apache-2.0)
+  </footer>
+  <script src="/static/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

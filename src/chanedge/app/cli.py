@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
         if settings.runtime.mode == "live":
             print("live mode is not implemented", file=sys.stderr)
             return 1
+        if args.command == "monitor":
+            return run_monitor(settings, Path(args.root))
         if args.command != "paper" and settings.universe.mode == "pin":
             print("pin does not run download, universe, backtest, or jev-warm", file=sys.stderr)
             return 1
@@ -120,6 +122,28 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
         print(str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def run_monitor(settings, root: Path, *, call=None) -> int:
+    """Start the read-only monitor as its own process. app does not import its drawing code."""
+    import subprocess
+
+    host = settings.monitor.host
+    if host != "127.0.0.1":
+        print(f"monitor.host must be 127.0.0.1, not {host}", file=sys.stderr)
+        return 1
+    command = [
+        sys.executable,
+        "-m",
+        "chanedge.monitor",
+        "--db",
+        str(root / settings.journal.sqlite_path),
+        "--host",
+        host,
+        "--port",
+        str(settings.monitor.port),
+    ]
+    return (call or subprocess.call)(command)
 
 
 def run_backtest_command(app, *, vision_root: Path, end: date):
@@ -244,4 +268,5 @@ def _parser() -> argparse.ArgumentParser:
     paper = commands.add_parser("paper", parents=[parent])
     paper.add_argument("--once", action="store_true")
     commands.add_parser("jev-warm", parents=[parent])
+    commands.add_parser("monitor", parents=[parent])
     return parser
