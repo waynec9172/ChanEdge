@@ -40,11 +40,15 @@ def measure_gaps(bars: Sequence[Bar], *, max_gap_bars: int) -> GapCheck:
         raise TypeError("max_gap_bars must be an int")
     if max_gap_bars < 0:
         raise ValueError("max_gap_bars must be >= 0")
-    closed = sorted((bar for bar in bars if bar.is_closed), key=lambda bar: bar.open_time)
+    closed = [bar for bar in bars if bar.is_closed]
+    if any(later.open_time <= earlier.open_time for earlier, later in zip(closed, closed[1:])):
+        closed.sort(key=lambda bar: bar.open_time)
     if not closed:
         return GapCheck(is_gap=False, missing_bar_count=0)
     timeframe = closed[0].timeframe
     duration = timeframe_duration(timeframe)
+    if _contiguous(closed, timeframe, duration):
+        return GapCheck(is_gap=False, missing_bar_count=0)
     total = 0
     is_gap = False
     previous = closed[0]
@@ -63,6 +67,19 @@ def measure_gaps(bars: Sequence[Bar], *, max_gap_bars: int) -> GapCheck:
             is_gap = True
         previous = bar
     return GapCheck(is_gap=is_gap, missing_bar_count=total)
+
+
+def _contiguous(closed: Sequence[Bar], timeframe: Timeframe, duration: timedelta) -> bool:
+    """Fast path for the usual window. Bars sit on timeframe boundaries, so when the
+    open times strictly increase and span (n - 1) bars, every step is one bar."""
+    if closed[-1].open_time - closed[0].open_time != duration * (len(closed) - 1):
+        return False
+    previous = closed[0]
+    for bar in closed[1:]:
+        if bar.timeframe is not timeframe or bar.open_time <= previous.open_time:
+            return False
+        previous = bar
+    return True
 
 
 def is_stale(

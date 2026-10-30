@@ -13,7 +13,7 @@ from chanedge.chanlun.include import include_merge
 from chanedge.chanlun.segment import minimal_break
 from chanedge.chanlun.version import ENGINE_VERSION
 from chanedge.domain.bars import Bar
-from chanedge.domain.canon import canonical_json, format_fixed8, format_time_z
+from chanedge.domain.canon import canonical_json
 from chanedge.domain.chanlun import ChanSnapshot, Segment
 from chanedge.domain.enums import Timeframe
 
@@ -106,21 +106,8 @@ def _validate(bars: tuple[Bar, ...], timeframe: Timeframe, as_of: datetime) -> N
 
 
 def _window_hash(bars: Sequence[Bar]) -> str:
-    """Same line as marketdata bar_window_hash. chanlun does not import marketdata."""
-    lines = [
-        "|".join(
-            (
-                format_time_z(bar.open_time),
-                format_fixed8(bar.open),
-                format_fixed8(bar.high),
-                format_fixed8(bar.low),
-                format_fixed8(bar.close),
-                format_fixed8(bar.volume),
-            )
-        )
-        for bar in bars
-        if bar.is_closed
-    ]
+    """Same line as marketdata bar_window_hash. Each Bar formats its line once."""
+    lines = [bar.window_line() for bar in bars if bar.is_closed]
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 

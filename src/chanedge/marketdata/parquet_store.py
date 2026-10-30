@@ -78,7 +78,12 @@ class ParquetBarStore:
             raise ParquetUnreadable(f"{path} cannot be opened") from exc
         if table.num_rows == 0:
             return ()
-        stored = [store_bar(_bar_from_row(row, timeframe)) for row in table.to_pylist()]
+        columns = table.to_pydict()
+        names = list(columns)
+        stored = [
+            store_bar(_bar_from_row(dict(zip(names, values)), timeframe))
+            for values in zip(*(columns[name] for name in names))
+        ]
         stored.sort(key=lambda item: item.bar.open_time)
         return tuple(stored)
 

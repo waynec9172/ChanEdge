@@ -12,7 +12,7 @@ from typing import Mapping
 
 from pydantic import model_validator
 
-from chanedge.domain.bars import Bar, DataQuality, Instrument, MultiTimeframeContext
+from chanedge.domain.bars import Bar, BarTuple, DataQuality, Instrument, MultiTimeframeContext
 from chanedge.domain.chanlun import ChanSignal, ChanSnapshot
 from chanedge.domain.decision import (
     FeatureVector,
@@ -191,7 +191,7 @@ class PipelineRequest(DomainModel):
     group: str
     full_log: bool
     flattened: bool
-    bars: Mapping[Timeframe, tuple[Bar, ...]]
+    bars: Mapping[Timeframe, BarTuple]
     data_quality: DataQuality
     instrument: Instrument
     account: AccountView

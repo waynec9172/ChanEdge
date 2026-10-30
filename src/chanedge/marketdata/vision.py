@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from chanedge.domain.bars import Bar, timeframe_duration
-from chanedge.domain.canon import format_fixed8, format_time_z
 from chanedge.domain.enums import Timeframe
 from chanedge.marketdata.infer import is_plain_number
 
@@ -29,10 +28,13 @@ INTERVALS = ("15m", "1h", "4h", "1d")
 
 @dataclass(frozen=True)
 class StoredBar:
-    """A Bar plus the window line computed when the bar entered memory."""
+    """A Bar plus its window line. The line is formatted on first use and cached on the Bar."""
 
     bar: Bar
-    window_line: str
+
+    @property
+    def window_line(self) -> str:
+        return self.bar.window_line()
 
 
 @dataclass(frozen=True)
@@ -59,17 +61,8 @@ class FundingMonth:
 
 
 def bar_window_line(bar: Bar) -> str:
-    """open_time|open|high|low|close|volume using the canonical formatters."""
-    return "|".join(
-        (
-            format_time_z(bar.open_time),
-            format_fixed8(bar.open),
-            format_fixed8(bar.high),
-            format_fixed8(bar.low),
-            format_fixed8(bar.close),
-            format_fixed8(bar.volume),
-        )
-    )
+    """open_time|open|high|low|close|volume using the canonical formatters. Cached on the Bar."""
+    return bar.window_line()
 
 
 def bar_window_hash(lines: Sequence[str]) -> str:
@@ -79,7 +72,7 @@ def bar_window_hash(lines: Sequence[str]) -> str:
 
 
 def store_bar(bar: Bar) -> StoredBar:
-    return StoredBar(bar=bar, window_line=bar_window_line(bar))
+    return StoredBar(bar=bar)
 
 
 def warmup_open(history_start: date, timeframe: Timeframe, window: int) -> datetime:

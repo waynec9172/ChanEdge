@@ -73,3 +73,32 @@ def test_bar_rejects_bad_prices_volume_and_time() -> None:
     assert open_time_is_aligned(T0, Timeframe.M15)
     with pytest.raises(ValueError):
         open_time_is_aligned(datetime(2024, 1, 1, 0, 0), Timeframe.M15)
+
+
+def test_window_line_is_cached_and_a_copy_with_new_prices_recomputes() -> None:
+    bar = make_bar()
+    line = bar.window_line()
+    assert line.startswith("2024-01-01T00:00:00.000Z|")
+    assert bar.window_line() is line
+    assert "window_line" not in bar.model_dump()
+    moved = bar.model_copy(update={"close": bar.close + 0.5, "high": bar.high + 0.5})
+    assert moved.window_line() != line
+    assert moved.window_line().split("|")[4] == f"{moved.close:.8f}"
+
+
+def test_bar_windows_skip_revalidation_only_for_real_bars() -> None:
+    from chanedge.domain.decision import ChartFrame
+    from chanedge.domain.enums import DecisionAction, StructureBias
+
+    bar = make_bar()
+    fields = dict(
+        symbol=bar.symbol, timeframe=Timeframe.M15, as_of=bar.close_time, snapshot_id="cs_0123456789abcdef",
+        structure_bias=StructureBias.UP, bis=(), zhongshus=(), signals=(), last_action=DecisionAction.HOLD,
+    )
+    assert ChartFrame(bars=(bar,), **fields).bars == (bar,)
+    from_dict = ChartFrame(bars=[bar.model_dump()], **fields)
+    assert from_dict.bars == (bar,)
+    with pytest.raises(ValidationError):
+        ChartFrame(bars=[{**bar.model_dump(), "low": -1.0}], **fields)
+    with pytest.raises(ValidationError):
+        ChartFrame(bars=["not a bar"], **fields)

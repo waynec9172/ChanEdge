@@ -712,3 +712,17 @@ def test_systemone_values_live_in_the_default_yaml() -> None:
     from chanedge.config.model import SystemOneSettings
 
     assert all(field.is_required() for field in SystemOneSettings.model_fields.values())
+
+
+def test_canonical_fast_path_matches_the_general_path() -> None:
+    from decimal import Decimal as D
+
+    from chanedge.domain.canon import _dump, _dump_general
+    from chanedge.domain.enums import Mark, Timeframe
+
+    sample = {
+        "z": [1, 2.5, -0.0, None, True, False, Mark.TOP, Timeframe.H4, D("1.123456785")],
+        "a": {"nested": ("x", 'quote"é', 3), "time": datetime(2024, 1, 1, tzinfo=timezone.utc)},
+        "m": [{"b": 1.0, "a": 0.1 + 0.2}],
+    }
+    assert _dump(sample) == _dump_general(sample)

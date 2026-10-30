@@ -164,6 +164,11 @@ def _span(
     start_price: float,
     end_price: float,
 ) -> tuple[float, float]:
-    highs = [bars[index].high for index in range(start_raw, end_mid + 1)]
-    lows = [bars[index].low for index in range(start_raw, end_mid + 1)]
-    return max([*highs, start_price, end_price]), min([*lows, start_price, end_price])
+    high = max(start_price, end_price)
+    low = min(start_price, end_price)
+    for bar in bars[start_raw : end_mid + 1]:
+        if bar.high > high:
+            high = bar.high
+        if bar.low < low:
+            low = bar.low
+    return high, low

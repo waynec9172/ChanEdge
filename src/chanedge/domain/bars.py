@@ -6,8 +6,11 @@ import math
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from pydantic import model_validator
+from typing import Annotated
 
+from pydantic import PrivateAttr, WrapValidator, model_validator
+
+from chanedge.domain.canon import format_fixed8, format_time_z
 from chanedge.domain.chanlun import ChanSnapshot
 from chanedge.domain.enums import InstrumentSource, ProductType, Timeframe
 from chanedge.domain.model import AwareDatetime, DomainModel
@@ -58,6 +61,35 @@ class Bar(DomainModel):
     trades: int | None = None
     is_closed: bool
     source: str
+    # Canonical bar_window_hash line, built once per Bar. Not a field: it is
+    # not dumped, hashed, or compared.
+    _window_line: str | None = PrivateAttr(default=None)
+
+    def window_line(self) -> str:
+        """open_time|open|high|low|close|volume with the canonical formatters."""
+        # __pydantic_private__ directly: the attribute path goes through
+        # BaseModel.__getattr__, which cost more than the hash itself.
+        private = self.__pydantic_private__
+        line = private.get("_window_line")
+        if line is None:
+            line = "|".join(
+                (
+                    format_time_z(self.open_time),
+                    format_fixed8(self.open),
+                    format_fixed8(self.high),
+                    format_fixed8(self.low),
+                    format_fixed8(self.close),
+                    format_fixed8(self.volume),
+                )
+            )
+            private["_window_line"] = line
+        return line
+
+    def model_copy(self, *, update=None, deep: bool = False) -> Bar:
+        copied = super().model_copy(update=update, deep=deep)
+        if update:
+            copied._window_line = None
+        return copied
 
     @model_validator(mode="after")
     def check_ohlcv(self) -> Bar:
@@ -84,6 +116,21 @@ class Bar(DomainModel):
         if close_utc != open_utc + timeframe_duration(self.timeframe):
             raise ValueError("close_time must be open_time plus one timeframe")
         return self
+
+
+def _bar_tuple(value: object, handler) -> tuple[Bar, ...]:
+    """A window is built from Bars that were validated once at load.
+
+    Re-running every Bar's validator each time a context or request wraps a
+    3000-bar window was most of the backtest's time. Anything that is not
+    already a tuple or list of Bar goes through normal validation.
+    """
+    if isinstance(value, (tuple, list)) and all(type(item) is Bar for item in value):
+        return tuple(value)
+    return handler(value)
+
+
+BarTuple = Annotated[tuple[Bar, ...], WrapValidator(_bar_tuple)]
 
 
 class Instrument(DomainModel):
@@ -114,7 +161,7 @@ class MultiTimeframeContext(DomainModel):
     context_id: str
     symbol: str
     decision_time: AwareDatetime
-    bars: dict[Timeframe, tuple[Bar, ...]]
+    bars: dict[Timeframe, BarTuple]
     snapshots: dict[Timeframe, ChanSnapshot]
     data_quality: DataQuality
     instrument: Instrument

@@ -84,3 +84,13 @@ def test_any_timeframe_gap_records_gap_data_and_backtest_is_not_stale(make_bar) 
     assert live.stale is True
     assert VetoCode.STALE_DATA.value in live.reasons
     assert VetoCode.GAP_DATA.value in live.reasons
+
+
+def test_gap_check_does_not_depend_on_input_order(make_bar) -> None:
+    start = make_bar().open_time
+    bars = [make_bar(open_time=start + timedelta(minutes=15 * index)) for index in (0, 1, 4, 5)]
+    for ordered in (bars, list(reversed(bars))):
+        check = measure_gaps(ordered, max_gap_bars=1)
+        assert check.is_gap is True and check.missing_bar_count == 2
+    contiguous = [make_bar(open_time=start + timedelta(minutes=15 * index)) for index in range(6)]
+    assert measure_gaps(list(reversed(contiguous)), max_gap_bars=1).missing_bar_count == 0

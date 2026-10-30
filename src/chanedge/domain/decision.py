@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from pydantic import model_validator
 
-from chanedge.domain.bars import Bar
+from chanedge.domain.bars import BarTuple
 from chanedge.domain.chanlun import Bi, ChanSignal, Zhongshu
 from chanedge.domain.enums import (
     CHANNEL_NAMES,
@@ -277,7 +277,7 @@ class ChartFrame(DomainModel):
     as_of: AwareDatetime
     snapshot_id: str
     structure_bias: StructureBias
-    bars: tuple[Bar, ...]
+    bars: BarTuple
     bis: tuple[Bi, ...]
     zhongshus: tuple[Zhongshu, ...]
     signals: tuple[ChanSignal, ...]

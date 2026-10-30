@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 from chanedge.domain.bars import Bar
 from chanedge.domain.enums import Direction
 
 
-@dataclass(frozen=True)
-class MergedBar:
+class MergedBar(NamedTuple):
+    """Immutable like the frozen dataclass it replaced, and cheaper to build once per bar."""
+
     high: float
     low: float
     raw_start: int
