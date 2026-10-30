@@ -65,11 +65,31 @@ def live_departure(zs: _Zhongshu, bars: Sequence[Bar], last_index: int) -> tuple
     """Live departure as of last_index. Returns (side, first outside bar)."""
     if last_index < zs.confirm_index:
         return None
-    side = "inside"
-    alive = False
-    start = zs.confirm_index
     end = min(last_index, len(bars) - 1)
-    for index in range(zs.confirm_index, end + 1):
+    if zs.scan_to < zs.confirm_index or zs.scan_to > end:
+        side, alive, start = _scan(zs, bars, zs.confirm_index, end, "inside", False, zs.confirm_index)
+        if zs.scan_to < zs.confirm_index:
+            zs.scan_to, zs.scan_side, zs.scan_alive, zs.scan_start = end, side, alive, start
+    else:
+        side, alive, start = _scan(
+            zs, bars, zs.scan_to + 1, end, zs.scan_side, zs.scan_alive, zs.scan_start
+        )
+        zs.scan_to, zs.scan_side, zs.scan_alive, zs.scan_start = end, side, alive, start
+    if not alive:
+        return None
+    return side, start
+
+
+def _scan(
+    zs: _Zhongshu,
+    bars: Sequence[Bar],
+    first: int,
+    end: int,
+    side: str,
+    alive: bool,
+    start: int,
+) -> tuple[str, bool, int]:
+    for index in range(first, end + 1):
         close = bars[index].close
         if zs.zd <= close <= zs.zg:
             side = "inside"
@@ -85,9 +105,7 @@ def live_departure(zs: _Zhongshu, bars: Sequence[Bar], last_index: int) -> tuple
             side = "down"
             start = index
             alive = True
-    if not alive:
-        return None
-    return side, start
+    return side, alive, start
 
 
 def _departure(zs: _Zhongshu, bars: Sequence[Bar]) -> str | None:

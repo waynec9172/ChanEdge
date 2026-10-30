@@ -69,7 +69,15 @@ class WalkState:
     def _append(self, start: DraftFenxing, end: DraftFenxing) -> None:
         self.held.append(
             _HeldBi(
-                bi=self._build(start.raw_start, start.id, start.bar_open_time, start.price, start.mark, end),
+                bi=self._build(
+                    start.raw_start,
+                    start.id,
+                    start.bar_open_time,
+                    start.price,
+                    start.mark,
+                    end,
+                    established_at=end.fenxing.time,
+                ),
                 end=end,
                 start_raw=start.raw_start,
             )
@@ -86,6 +94,7 @@ class WalkState:
                 last.bi.start_price,
                 start_mark,
                 end,
+                established_at=last.bi.established_at,
             ),
             end=end,
             start_raw=last.start_raw,
@@ -100,6 +109,8 @@ class WalkState:
         start_price: float,
         start_mark: Mark,
         end: DraftFenxing,
+        *,
+        established_at,
     ) -> Bi:
         direction = Direction.UP if start_mark is Mark.BOTTOM else Direction.DOWN
         high, low = _span(self.bars, start_raw, end.k_index_mid, start_price, end.price)
@@ -124,6 +135,7 @@ class WalkState:
             low=low,
             bar_count=end.k_index_mid - start_raw + 1,
             confirmed=True,
+            established_at=established_at,
         )
 
 

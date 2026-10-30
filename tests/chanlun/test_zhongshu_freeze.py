@@ -238,3 +238,20 @@ def _assert_fenxing(snap, bars, expected: dict) -> None:
     assert fx.mark == Mark(expected["mark"])
     endpoints = {point for bi in snap.bis for point in _span(bi, bars)}
     assert expected["mid"] not in endpoints
+
+
+def test_replaced_third_bi_keeps_its_confirm_bar_and_established_time(
+    bars_from_prices, load_fixture, config_hash
+) -> None:
+    fixture = load_fixture("golden_zs_zd_frozen.json")
+    bars = bars_from_prices(fixture["prices"])
+    engine = ChanEngine(config_hash=config_hash, min_bi_bars=fixture["min_bi_bars"])
+    confirmed, _ = _prefix(engine, bars, 11)
+    replaced, _ = _prefix(engine, bars, 13)
+    # The third bi 7->10 is confirmed at index 11 and becomes 7->12 at index 13.
+    assert confirmed.zhongshus[0].confirm_bar_open_time == bars[11].open_time
+    assert replaced.zhongshus[0].confirm_bar_open_time == bars[11].open_time
+    third = _find(replaced, bars, 7, 12)
+    assert third.established_at == bars[11].close_time
+    first = _find(replaced, bars, 1, 4)
+    assert first.established_at == bars[5].close_time

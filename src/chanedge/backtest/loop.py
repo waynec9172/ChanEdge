@@ -7,6 +7,7 @@ import app, marketdata, or journal, and it does not call the exchange port.
 from __future__ import annotations
 
 import time
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -80,10 +81,15 @@ def run_backtest(
     del initial_equity  # the broker already replayed or seeded cash
     limits = dict(_DEFAULT_WINDOWS if windows is None else windows)
     store = {
-        timeframe: {symbol: tuple(bar_source.load(symbol, timeframe)) for symbol in symbols}
+        timeframe: {symbol: _Series(bar_source.load(symbol, timeframe)) for symbol in symbols}
         for timeframe in Timeframe
     }
-    times = _decision_times(store[Timeframe.M15], history_start, history_end, refresh_minute)
+    times = _decision_times(
+        {symbol: series.bars for symbol, series in store[Timeframe.M15].items()},
+        history_start,
+        history_end,
+        refresh_minute,
+    )
     boards = _preload(universe_source, times, refresh_minute)
     started_at = clock.now()
     run_id = _run_id(
@@ -101,6 +107,8 @@ def run_backtest(
     shadow = ShadowBook()
     previous: dict[str, dict] = {}
     latest: dict = {}
+    # Slim copies only: a full PipelineResult keeps its context and 15m snapshot,
+    # about 1 MiB each, which a multi-year run cannot hold in memory.
     results = []
     fills: list[FillRecord] = []
     overlaps: list[float] = []
@@ -120,7 +128,7 @@ def run_backtest(
         flattened: set[str] = set()
         match_names = set(broker.open_symbols()) | set(broker.pending_symbols()) | shadow.active_symbols()
         for symbol in sorted(match_names):
-            bar = _bar_at(store[Timeframe.M15].get(symbol, ()), decision_time)
+            bar = _at(store[Timeframe.M15], symbol, decision_time)
             if bar is None:
                 continue
             was_open = broker.position(symbol) is not None
@@ -140,14 +148,22 @@ def run_backtest(
         if broker.open_symbols():
             exposure += 1
         jobs = _jobs(broker, shadow, board, store[Timeframe.M15], decision_time, flattened)
-        effective = list(broker.open_positions())
+        effective = effective_positions(broker)
         sequence = 0
+        bar_decisions: list[DecisionRecord] = []
         for group, symbol, is_flat in jobs:
             account = _view(broker, effective, marks)
+            request_bars = {
+                timeframe: _windowed(store[timeframe], symbol, decision_time, limits[timeframe])
+                for timeframe in Timeframe
+            }
             recorded = group != "shadow"
+            open_shadows = shadow.reviewable(symbol)
             position = broker.position(symbol) if group == "exit" else None
             if group == "shadow":
-                position = shadow.position(symbol)
+                # The exit group needs one position to build its context. Every
+                # shadow, this one included, is reviewed through shadow_positions.
+                position = open_shadows[0][1]
             request = PipelineRequest(
                 symbol=symbol,
                 decision_time=decision_time,
@@ -156,11 +172,8 @@ def run_backtest(
                 group="exit" if group != "entry" else "entry",
                 full_log=full_log,
                 flattened=is_flat,
-                bars={
-                    timeframe: _window(store[timeframe].get(symbol, ()), decision_time, limits[timeframe])
-                    for timeframe in Timeframe
-                },
-                data_quality=_quality(quality, symbol, decision_time, store[Timeframe.M15].get(symbol, ())),
+                bars=request_bars,
+                data_quality=_quality(quality, symbol, decision_time, request_bars),
                 instrument=instruments[symbol],
                 account=account,
                 safety=safety,
@@ -173,7 +186,7 @@ def run_backtest(
                 order_type=order_type,
                 group_order=sequence,
                 record=recorded,
-                shadow_position=None if not recorded else shadow.position(symbol),
+                shadow_positions=tuple(item for _key, item in open_shadows),
             )
             result = pipeline(request, services)
             sequence += 1
@@ -186,8 +199,11 @@ def run_backtest(
                 snap = result.snapshots.get(Timeframe.M15)
                 if snap is not None:
                     latest[symbol] = snap
+            for (key, _item), review in zip(open_shadows, result.shadow_reviews):
+                shadow.apply_review(key, review, result.bar_close, decision_time)
             if recorded:
-                results.append(result)
+                results.append(_slim_result(result))
+                bar_decisions.append(result.decision)
                 if result.amend is not None:
                     broker.amend(
                         symbol,
@@ -196,27 +212,15 @@ def run_backtest(
                         replace_arm=result.amend.reason is AmendReason.BREAKEVEN,
                         updated_at=decision_time,
                     )
-                if result.shadow_review is not None:
-                    shadow.apply_review(symbol, result.shadow_review, result.bar_close, decision_time)
                 effective = _apply_effective(effective, result)
                 _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_time)
                 if halted:
                     break
-            else:
-                if result.order is not None:
-                    shadow.add_pending(result.order)
-                if result.amend is not None:
-                    shadow.amend(
-                        symbol,
-                        result.amend.new_stop_price,
-                        arm_close=result.bar_close,
-                        replace_arm=result.amend.reason is AmendReason.BREAKEVEN,
-                    )
-                if halted:
-                    break
+            elif halted:
+                break
         flush = broker.take_flush()
         report_sink.commit_bar(
-            _commit(tuple(item.decision for item in results if item.decision.decision_time == decision_time), flush)
+            _commit(tuple(bar_decisions), flush)
         )
         for fill in flush.fills:
             fills.append(fill)
@@ -322,9 +326,54 @@ def _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_ti
         }
 
 
+def _slim_result(result):
+    """What the summary and the returned decisions read. Context, snapshots, and features are dropped."""
+    return result.model_copy(
+        update={
+            "context": None,
+            "snapshots": {},
+            "features": None,
+            "decision": result.decision.model_copy(update={"feature_json": None}),
+        }
+    )
+
+
+class _Series:
+    """Closed bars of one symbol and timeframe, indexed by close_time."""
+
+    def __init__(self, bars) -> None:
+        self.bars = tuple(sorted((bar for bar in bars if bar.is_closed), key=lambda bar: bar.close_time))
+        self.closes = [bar.close_time for bar in self.bars]
+        self.by_close = {bar.close_time: bar for bar in self.bars}
+
+    def at(self, decision_time: datetime):
+        return self.by_close.get(decision_time)
+
+    def window(self, decision_time: datetime, limit: int):
+        end = bisect_right(self.closes, decision_time)
+        if limit < 1:
+            return self.bars[:end]
+        return self.bars[max(0, end - limit) : end]
+
+    def last_at_or_before(self, decision_time: datetime):
+        end = bisect_right(self.closes, decision_time)
+        return None if end == 0 else self.bars[end - 1]
+
+
+_EMPTY = _Series(())
+
+
+def _at(series_by_symbol, symbol: str, decision_time: datetime):
+    return series_by_symbol.get(symbol, _EMPTY).at(decision_time)
+
+
+def _windowed(series_by_symbol, symbol: str, decision_time: datetime, limit: int):
+    return series_by_symbol.get(symbol, _EMPTY).window(decision_time, limit)
+
+
 def _jobs(broker, shadow, board, bars, decision_time, flattened: set[str]):
     def has_bar(symbol: str) -> bool:
-        return _bar_at(bars.get(symbol, ()), decision_time) is not None
+        return _at(bars, symbol, decision_time) is not None
 
     open_names = [symbol for symbol in broker.open_symbols() if has_bar(symbol)]
     dropped = sorted(symbol for symbol in open_names if symbol not in board)
@@ -340,7 +389,7 @@ def _jobs(broker, shadow, board, bars, decision_time, flattened: set[str]):
     jobs.extend(("entry", symbol, symbol in flattened) for _rank, symbol in entries)
     used.update(symbol for _group, symbol, _flat in jobs)
     for symbol in sorted(shadow.active_symbols()):
-        if symbol in used or shadow.position(symbol) is None or not has_bar(symbol):
+        if symbol in used or not shadow.reviewable(symbol) or not has_bar(symbol):
             continue
         jobs.append(("shadow", symbol, False))
     return jobs
@@ -367,6 +416,40 @@ def _view(broker, effective, marks) -> AccountView:
         open_position_count=count,
         gross_notional_quote=quantize(gross),
     )
+
+
+def effective_positions(broker) -> list[PositionState]:
+    """Open positions plus next_open orders that matching could not fill yet.
+
+    A pending exit takes its position out of the count. A pending entry counts
+    at qty x entry_reference. Orders normally fill in step 1; this covers a
+    symbol with no bar this decision and the first bar after a restart.
+    """
+    pending = [order for symbol in broker.pending_symbols() for order in broker.pending_for(symbol)]
+    exiting = {order.symbol for order in pending if order.reduce_only}
+    effective = [position for position in broker.open_positions() if position.symbol not in exiting]
+    held = {position.symbol for position in effective}
+    for order in pending:
+        plan = order.plan
+        if order.reduce_only or order.symbol in held or plan is None:
+            continue
+        if plan.entry_reference is None or plan.structure_stop_price is None or order.entry_decision_time is None:
+            continue
+        qty = order.qty if plan.side is Side.LONG else -order.qty
+        effective.append(
+            PositionState(
+                symbol=order.symbol,
+                qty=qty,
+                avg_price=float(plan.entry_reference),
+                stop_price=float(plan.structure_stop_price),
+                plan=plan,
+                entry_decision_id=order.decision_id,
+                entry_decision_time=order.entry_decision_time,
+                entry_bar_open_time=order.entry_decision_time,
+            )
+        )
+        held.add(order.symbol)
+    return effective
 
 
 def _apply_effective(effective, result):
@@ -413,8 +496,8 @@ def _seeds(broker) -> dict[str, dict]:
     return seeds
 
 
-def _quality(callback, symbol: str, decision_time: datetime, bars) -> DataQuality:
-    window = _window(bars, decision_time, len(bars) or 1)
+def _quality(callback, symbol: str, decision_time: datetime, windows) -> DataQuality:
+    """windows maps each timeframe to its engine window. The callback measures gaps."""
     if callback is None:
         quality = DataQuality(
             stale=False,
@@ -424,7 +507,7 @@ def _quality(callback, symbol: str, decision_time: datetime, bars) -> DataQualit
             reasons=(),
         )
     else:
-        quality = callback(symbol, decision_time, window)
+        quality = callback(symbol, decision_time, windows)
     if quality.stale:
         return quality.model_copy(update={"stale": False})
     return quality
@@ -458,27 +541,14 @@ def _decision_times(bars_by_symbol, history_start: date, history_end: date, refr
     return tuple(sorted(found))
 
 
-def _marks(bars_by_symbol, decision_time: datetime) -> dict[str, float]:
+def _marks(series_by_symbol, decision_time: datetime) -> dict[str, float]:
+    """Last closed price at or before decision_time. A missing bar does not drop the mark."""
     marks = {}
-    for symbol, bars in bars_by_symbol.items():
-        bar = _bar_at(bars, decision_time)
+    for symbol, series in series_by_symbol.items():
+        bar = series.last_at_or_before(decision_time)
         if bar is not None:
             marks[symbol] = bar.close
     return marks
-
-
-def _window(bars, decision_time: datetime, limit: int):
-    closed = [bar for bar in bars if bar.is_closed and bar.close_time <= decision_time]
-    if limit < 1:
-        return tuple(closed)
-    return tuple(closed[-limit:])
-
-
-def _bar_at(bars, decision_time: datetime):
-    for bar in bars:
-        if bar.is_closed and bar.close_time == decision_time:
-            return bar
-    return None
 
 
 def _universe_date(moment: datetime, refresh_minute: int) -> date:

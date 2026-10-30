@@ -27,7 +27,7 @@ from chanedge.jev.model import JevModel
 from chanedge.typesafe.cache import JsonlReader, LookupCaller
 from chanedge.typesafe.client import JsonlClient
 from chanedge.journal.book import JournalLedger
-from chanedge.marketdata.ccxt_adapter import instrument_from_market
+from chanedge.marketdata.ccxt_adapter import instrument_from_market, is_usdt_perp
 from chanedge.marketdata.parquet_store import ParquetBarStore
 from chanedge.marketdata.version import MARKETDATA_VERSION
 from chanedge.risk.size import RiskManager
@@ -175,7 +175,11 @@ def compose(
         feature_version=FEATURE_VERSION,
         marketdata_version=MARKETDATA_VERSION,
         safety=SafetyState(kill_switch=settings.safety.kill_switch, mode=RuntimeMode.PAPER),
-        instruments=instruments_from_exchange(exchange, settings.runtime.venue),
+        instruments=instruments_from_exchange(
+            exchange,
+            settings.runtime.venue,
+            default_leverage=settings.risk.max_leverage,
+        ),
         log=configure_logging(),
         systemone_reader=reader,
         systemone_client=client,
@@ -191,17 +195,24 @@ def _require_version_pair(settings) -> None:
         raise RuntimeError("systemone.enabled false requires jev.version weighted-v1")
 
 
-def instruments_from_exchange(exchange: object, venue: str) -> dict[str, Instrument]:
+def instruments_from_exchange(
+    exchange: object,
+    venue: str,
+    *,
+    default_leverage: int | None = None,
+) -> dict[str, Instrument]:
+    """USDT-margined linear perpetuals only. BTC/USDC:USDC and dated futures share the
+    base asset and would otherwise overwrite BTC/USDT."""
     load = getattr(exchange, "load_markets", None)
     if load is None:
         return {}
     markets = load()
     found: dict[str, Instrument] = {}
     for market in markets.values():
-        if not isinstance(market, dict):
+        if not isinstance(market, dict) or not is_usdt_perp(market):
             continue
         try:
-            instrument = instrument_from_market(market, venue=venue)
+            instrument = instrument_from_market(market, venue=venue, default_leverage=default_leverage)
         except (TypeError, ValueError):
             continue
         found[instrument.symbol] = instrument

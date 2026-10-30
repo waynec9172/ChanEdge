@@ -80,7 +80,7 @@ def test_field_names_match_section6() -> None:
         },
         Bi: {
             "id", "timeframe", "direction", "start_fx_id", "end_fx_id", "start_time", "end_time",
-            "start_price", "end_price", "high", "low", "bar_count", "confirmed",
+            "start_price", "end_price", "high", "low", "bar_count", "confirmed", "established_at",
         },
         Segment: {
             "id", "timeframe", "direction", "start_bi_id", "end_bi_id", "start_time", "end_time",
@@ -88,7 +88,7 @@ def test_field_names_match_section6() -> None:
         },
         Zhongshu: {
             "id", "timeframe", "zg", "zd", "gg", "dd", "start_time", "end_time", "bi_ids",
-            "direction_into", "level", "confirmed",
+            "direction_into", "level", "confirmed", "confirm_bar_open_time",
         },
         ChanSignal: {
             "id", "timeframe", "type", "status", "time", "price", "direction", "defending_fx_id",

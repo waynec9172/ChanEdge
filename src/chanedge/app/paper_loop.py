@@ -15,6 +15,7 @@ from pathlib import Path
 
 from chanedge.app.compose import PaperApp
 from chanedge.app.pipeline import PipelineServices
+from chanedge.backtest.loop import effective_positions
 from chanedge.backtest.matcher import match_bar
 from chanedge.domain.accounting import mark_pnl, quantize
 from chanedge.domain.bars import DataQuality, Instrument, timeframe_duration
@@ -44,6 +45,7 @@ from chanedge.domain.serialize import dump_model, dump_models
 from chanedge.journal.repository import ChartFrameRow
 from chanedge.marketdata.ccxt_adapter import (
     CcxtMarketData,
+    is_usdt_perp,
     paper_daily_quotes,
     sync_closed_bars,
 )
@@ -61,7 +63,6 @@ from chanedge.marketdata.universe import members_from_selection, select_universe
 from chanedge.marketdata.vision import (
     download_start,
     funding_month_csv,
-    kline_files_for_month,
     ranking_open_time,
     read_daily_for_month,
     read_funding_month,
@@ -88,25 +89,18 @@ def run_paper_bar(app: PaperApp, *, decision_time: datetime, sleep) -> PaperBarR
     watched = tuple(sorted(set(board) | set(app.broker.open_symbols())))
     expected_open = decision_time - timeframe_duration(Timeframe.M15)
     sleep(app.settings.marketdata.close_wait_seconds)
-    while True:
-        for symbol in watched:
-            _sync_symbol(app, symbol, decision_time)
-        if not watched or _bars_arrived(app, watched, decision_time, expected_open):
-            break
-        now = app.clock.now()
-        last_close = _last_close(app, watched, decision_time)
-        if is_stale(now, last_close, stale_grace_seconds=app.settings.marketdata.stale_grace_seconds):
-            decisions = _stale_holds(app, watched, decision_time, board)
-            _commit(app, decisions)
-            return PaperBarResult(started=True, decisions=tuple(decisions), stale=True)
-        sleep(app.settings.marketdata.close_wait_seconds)
+    late = _wait_for_bars(app, watched, decision_time, expected_open, sleep)
     loaded = _load_windows(app, watched, decision_time)
     flattened = _match_all(app, loaded[Timeframe.M15], decision_time)
     decisions: list[DecisionRecord] = []
+    for symbol in late:
+        if symbol in board or app.broker.position(symbol) is not None:
+            decisions.append(_hold(app, symbol, decision_time, board.get(symbol), VetoCode.STALE_DATA))
+            _log_decision(app, decisions[-1], {})
     ran = []
     started = app.clock.now()
     jobs = _jobs(app, board, loaded[Timeframe.M15], decision_time, flattened)
-    effective = list(app.broker.open_positions())
+    effective = effective_positions(app.broker)
     marks = _marks(loaded[Timeframe.M15], decision_time)
     sequence = 0
     for group, symbol, is_flat in jobs:
@@ -163,7 +157,44 @@ def run_paper_bar(app: PaperApp, *, decision_time: datetime, sleep) -> PaperBarR
         _log_decision(app, result.decision, bucket)
     _commit(app, decisions)
     _frames(app, ran, board, decision_time)
-    return PaperBarResult(started=True, decisions=tuple(decisions), stale=False)
+    return PaperBarResult(started=True, decisions=tuple(decisions), stale=bool(late))
+
+
+def _wait_for_bars(app: PaperApp, watched, decision_time: datetime, expected_open: datetime, sleep) -> tuple[str, ...]:
+    """Sync until every symbol has the expected bar, or each missing one is stale.
+
+    Returns the symbols still missing. One late or delisted symbol does not hold
+    back matching and the pipeline for the others. A symbol that cannot be
+    synced is not waited for.
+    """
+    syncable = _listed(app)
+    first = True
+    while True:
+        missing = []
+        for symbol in watched:
+            if not first and _latest_open(app, symbol, decision_time) == expected_open:
+                continue
+            _sync_symbol(app, symbol, decision_time)
+            if _latest_open(app, symbol, decision_time) != expected_open:
+                missing.append(symbol)
+        first = False
+        if not missing:
+            return ()
+        now = app.clock.now()
+        waiting = [
+            symbol
+            for symbol in missing
+            if symbol in syncable
+            and app.instruments.get(symbol) is not None
+            and not is_stale(
+                now,
+                _last_close(app, (symbol,), decision_time - timeframe_duration(Timeframe.M15)),
+                stale_grace_seconds=app.settings.marketdata.stale_grace_seconds,
+            )
+        ]
+        if not waiting:
+            return tuple(missing)
+        sleep(app.settings.marketdata.close_wait_seconds)
 
 
 def serve(app: PaperApp, *, sleep=time.sleep) -> None:
@@ -215,24 +246,28 @@ def download_history(app: PaperApp, *, vision_root: Path, end: date) -> int:
     start = download_start(history, windows)
     symbols = _symbols_in_files(app.root, app.settings.runtime.venue, history, end)
     written = 0
-    clock = datetime(end.year, end.month, end.day, 23, 59, tzinfo=_UTC)
+    # The last 15m, 1h, and 4h bars of `end` close at 00:00 the next day.
+    clock = datetime(end.year, end.month, end.day, tzinfo=_UTC) + timedelta(days=1)
     for symbol in symbols:
         compact = symbol.replace("/", "")
         for timeframe, _window in windows.items():
-            for year, month in _months(start, clock):
-                bars = read_klines_for_month(
-                    vision_root,
-                    compact,
-                    timeframe.value,
-                    year,
-                    month,
-                    symbol=symbol,
-                    source=app.settings.runtime.venue,
-                    clock=clock,
+            collected = []
+            for year, month in _months(start, clock - timedelta(microseconds=1)):
+                collected.extend(
+                    read_klines_for_month(
+                        vision_root,
+                        compact,
+                        timeframe.value,
+                        year,
+                        month,
+                        symbol=symbol,
+                        source=app.settings.runtime.venue,
+                        clock=clock,
+                    )
                 )
-                if bars:
-                    app.store.write_closed(app.settings.runtime.venue, symbol, timeframe, bars)
-                    written += len(bars)
+            if collected:
+                app.store.merge_closed(app.settings.runtime.venue, symbol, timeframe, collected)
+                written += len(collected)
         for year, month in _months(start, clock):
             _copy_funding(vision_root, app.root, compact, year, month)
     return written
@@ -409,7 +444,7 @@ def _write_daily(app: PaperApp, day: date, path: Path) -> None:
     end = start + timedelta(days=1)
     quotes = []
     for item in markets:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not is_usdt_perp(item):
             continue
         venue_symbol = item.get("symbol")
         if not isinstance(venue_symbol, str):
@@ -445,22 +480,25 @@ def _sync_symbol(app: PaperApp, symbol: str, decision_time: datetime) -> None:
                 history_start=history,
                 window=window,
                 end=decision_time,
+                start_if_empty=_window_start(decision_time, timeframe, window),
             )
         except Exception as exc:
             _log_error(app, "bar_sync", symbol, exc)
+
+
+def _window_start(decision_time: datetime, timeframe: Timeframe, window: int) -> datetime:
+    """Paper has no history_start. A first fill covers the window that closes by decision_time."""
+    duration = timeframe_duration(timeframe)
+    utc = decision_time.astimezone(_UTC)
+    epoch = datetime(1970, 1, 1, tzinfo=_UTC)
+    last_close = epoch + ((utc - epoch) // duration) * duration
+    return last_close - duration * window
 
 
 def _listed(app: PaperApp) -> set[str]:
     if app.listed is not None:
         return set(app.listed())
     return set(app.instruments)
-
-
-def _bars_arrived(app: PaperApp, symbols, decision_time: datetime, expected_open: datetime) -> bool:
-    for symbol in symbols:
-        if _latest_open(app, symbol, decision_time) != expected_open:
-            return False
-    return True
 
 
 def _latest_open(app: PaperApp, symbol: str, decision_time: datetime) -> datetime | None:
@@ -471,13 +509,13 @@ def _latest_open(app: PaperApp, symbol: str, decision_time: datetime) -> datetim
     return latest
 
 
-def _last_close(app: PaperApp, symbols, decision_time: datetime) -> datetime:
+def _last_close(app: PaperApp, symbols, default: datetime) -> datetime:
     latest = None
     for symbol in symbols:
         for bar in _stored(app, symbol, Timeframe.M15):
             if bar.is_closed and (latest is None or bar.close_time > latest):
                 latest = bar.close_time
-    return decision_time if latest is None else latest
+    return default if latest is None else latest
 
 
 def _stored(app: PaperApp, symbol: str, timeframe: Timeframe):
@@ -544,14 +582,6 @@ def _jobs(app: PaperApp, board: dict[str, int], bars, decision_time: datetime, f
     )
     jobs.extend(("entry", symbol, symbol in flattened) for _rank, symbol in entries)
     return jobs
-
-
-def _stale_holds(app: PaperApp, symbols, decision_time: datetime, board: dict[str, int]):
-    decisions = []
-    for symbol in symbols:
-        decisions.append(_hold(app, symbol, decision_time, board.get(symbol), VetoCode.STALE_DATA))
-        _log_decision(app, decisions[-1], {})
-    return decisions
 
 
 def _hold(app: PaperApp, symbol: str, decision_time: datetime, rank: int | None, code: VetoCode):
@@ -674,6 +704,17 @@ def _quality(app: PaperApp, bars) -> DataQuality:
         stale_grace_seconds=app.settings.marketdata.stale_grace_seconds,
         backtest=False,
     )
+
+
+def backtest_quality(settings):
+    """Gap check for the backtest and jev-warm windows. The backtest clock is never stale."""
+    gaps = _gaps(settings)
+
+    def measure(symbol: str, decision_time: datetime, windows) -> DataQuality:
+        del symbol, decision_time
+        return assess_quality(windows, max_gap_bars=gaps, backtest=True)
+
+    return measure
 
 
 def _instrument(app: PaperApp, symbol: str) -> Instrument:
@@ -965,12 +1006,12 @@ def _kline_text(root: Path, symbol: str) -> str | None:
     compact = symbol.replace("/", "")
     for interval in ("15m", "1h", "4h"):
         folder = root / "data" / "futures" / "um" / "monthly" / "klines" / compact / interval
-        if not folder.is_dir():
-            continue
-        files = sorted(folder.glob("*.csv"))
+        files = sorted(folder.glob("*.csv")) if folder.is_dir() else []
         if files:
             return files[0].read_text(encoding="utf-8")
-        found = kline_files_for_month(root, compact, interval, 2024, 1)
-        if found:
-            return found[0].read_text(encoding="utf-8")
+    for interval in ("15m", "1h", "4h"):
+        daily = root / "data" / "futures" / "um" / "daily" / "klines" / compact / interval
+        files = sorted(daily.glob("*.csv")) if daily.is_dir() else []
+        if files:
+            return files[0].read_text(encoding="utf-8")
     return None

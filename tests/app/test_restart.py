@@ -319,3 +319,27 @@ def test_restart_plan_entry_uses_the_stored_cash(tmp_path: Path) -> None:
     assert result.decisions[0].action == DecisionAction.ENTER_LONG.value
     assert spy.plans == 1
     assert spy.equities == [Decimal("10009.89500000")]
+
+
+def test_restart_with_a_pending_entry_fills_it_on_the_next_bar(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    _restart(app)
+    spy = SpyRisk(RiskManager(risk_params(app.settings)))
+    _arm(app, ScriptedEngine({(SYMBOL, T15): _signal()}), spy)
+    first = run_paper_bar(app, decision_time=T15, sleep=lambda _seconds: None)
+    assert first.decisions[0].action == DecisionAction.ENTER_LONG.value
+    broker = _restart(app)
+    pending = broker.pending_for(SYMBOL)
+    assert len(pending) == 1
+    assert pending[0].plan is not None
+    assert pending[0].entry_decision_time == T15
+    t30 = T15 + timedelta(minutes=15)
+    app.store.write_closed("binanceusdm", SYMBOL, Timeframe.M15, [store_bar(_candle(Timeframe.M15, T15, low=99.5))])
+    app.clock = _Clock(t30)
+    _arm(app, ScriptedEngine({}), spy)
+    second = run_paper_bar(app, decision_time=t30, sleep=lambda _seconds: None)
+    assert second.started is True
+    held = broker.position(SYMBOL)
+    assert held is not None
+    assert held.entry_decision_time == T15
+    assert broker.pending_for(SYMBOL) == ()

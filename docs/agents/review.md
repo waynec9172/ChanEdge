@@ -38,7 +38,7 @@
 2. 打開該套件、它的測試，以及實作計畫裡對應的 PR 節。
 3. 行為和數字以架構稿正文為準。實作計畫若寫出第二種行為，記在實作計畫。
 4. 跑下面的 pytest。沒跑過就不要寫通過。
-5. 一次只審或只改使用者點名的那個 PR。PR-13 沒有開始。使用者沒有說要做之前，不要補監控網頁。
+5. 一次只審或只改使用者點名的那個 PR。PR-13 已完成。監控只讀幀，不要替它加寫入路由或改綁其他位址。
 
 回覆仍用 critical / major / minor。每條要有：嚴重度、架構稿或實作計畫的章節、正文原句、對上的檔案與行為、問題、建議改法。`approve` 只在你跑過相關測試、而且說明核對了哪些高風險路徑時才寫。
 
@@ -78,11 +78,13 @@ chanedge = "chanedge.app.cli:main"
 .\.venv\Scripts\chanedge.exe download --config config/default.yaml
 .\.venv\Scripts\chanedge.exe universe --config config/default.yaml
 .\.venv\Scripts\chanedge.exe universe --reconstruct --config config/default.yaml
-.\.venv\Scripts\chanedge.exe backtest --config config/default.yaml
+.\.venv\Scripts\chanedge.exe backtest --config config/default.yaml --overlay config/paper.yaml
 .\.venv\Scripts\chanedge.exe paper --config config/paper.yaml --once
 ```
 
 共用旗標是 `--config`（預設 `config/default.yaml`）、`--overlay`、`--root`（預設 `.`）、`--vision`、`--end`。`paper` 另有 `--once`。`universe` 另有 `--reconstruct`。
+
+`backtest` 要放行進場必須加 `--overlay config/paper.yaml`：`default.yaml` 的 `safety.kill_switch` 是 true，回測照樣套用，所有進場都會被 `KILL_SWITCH` 否決，報告會沒有成交。這時命令會在 stderr 印警告。
 
 `main` 抓住例外，印出 `str(exc)`，回傳 1。`mode=live` 在組裝之前就失敗。`universe.mode` 為 `pin` 時，`download`、`universe`、`backtest` 回傳 1。紙交易才使用 pin 清單。
 

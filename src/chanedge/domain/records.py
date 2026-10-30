@@ -205,7 +205,8 @@ class PipelineRequest(DomainModel):
     order_type: str
     group_order: int
     record: bool = True
-    shadow_position: PositionState | None = None
+    # Every open shadow on this symbol. Each gets its own review_open.
+    shadow_positions: tuple[PositionState, ...] = ()
 
 
 class PipelineResult(DomainModel):
@@ -225,5 +226,5 @@ class PipelineResult(DomainModel):
     bar_close: float | None
     order: PendingOrder | None
     snapshots: Mapping[Timeframe, ChanSnapshot]
-    shadow_review: PositionReview | None
+    shadow_reviews: tuple[PositionReview, ...]
     reason_steps: tuple[ReasonStep, ...]

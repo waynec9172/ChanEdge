@@ -278,6 +278,8 @@ class PaperBroker:
             if position is None:
                 raise ValueError("reduce without a position")
             updated = position.model_copy(update={"qty": new_qty, "avg_price": float(new_avg)})
+            if fill.partial_reason is not None:
+                updated = _tp1_done(updated)
         else:
             if pending is None or pending.plan is None or pending.entry_decision_time is None:
                 raise ValueError("entry fill is missing its plan")
@@ -368,6 +370,12 @@ class PaperBroker:
             return
         stored_cash = self._ledger.get_cash()
         self.cash = self._initial if stored_cash is None else quantize(stored_cash)
+
+
+def _tp1_done(position: PositionState) -> PositionState:
+    """TP1 is one partial. Dropping the target from the stored plan keeps it from firing again."""
+    plan = position.plan.model_copy(update={"partial_targets": ()})
+    return position.model_copy(update={"plan": plan})
 
 
 def _replay(initial: Decimal, fills: tuple[JoinedFill, ...] | list[JoinedFill]) -> Decimal:

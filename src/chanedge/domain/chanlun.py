@@ -43,6 +43,9 @@ class Bi(DomainModel):
     low: float
     bar_count: int
     confirmed: bool
+    # Confirmation time of the fenxing that first established this bi. A later
+    # endpoint replacement keeps it, so callers can tell new from replaced.
+    established_at: AwareDatetime | None = None
 
 
 class Segment(DomainModel):
@@ -73,6 +76,9 @@ class Zhongshu(DomainModel):
     direction_into: Direction
     level: int
     confirmed: bool
+    # open_time of the bar where departure scanning starts: the right bar of the
+    # third bi's first confirmation. Frozen like ZG and ZD.
+    confirm_bar_open_time: AwareDatetime | None = None
 
 
 class ChanSignal(DomainModel):

@@ -120,7 +120,7 @@ class JsonlClient:
         usage = getattr(response, "usage", None)
         return {
             "model": getattr(response, "model", None),
-            "answers": answers if isinstance(answers, dict) else _answers_from(response),
+            "answers": _plain_answers(answers if isinstance(answers, dict) else _answers_from(response)),
             "usage": {
                 "input_tokens": getattr(usage, "input_tokens", None),
                 "output_tokens": getattr(usage, "output_tokens", None),
@@ -145,6 +145,15 @@ class JsonlClient:
             pass
         self._sdk = TypeSafeClient(**kwargs)
         return self._sdk
+
+
+def _plain_answers(answers: dict[str, object]) -> dict[str, object]:
+    """The SDK returns ScoreAnswer and ChoiceAnswer models. _parse reads plain dicts."""
+    plain: dict[str, object] = {}
+    for name, answer in answers.items():
+        dump = getattr(answer, "model_dump", None)
+        plain[name] = dump() if callable(dump) else answer
+    return plain
 
 
 def _answers_from(response: object) -> dict[str, object]:

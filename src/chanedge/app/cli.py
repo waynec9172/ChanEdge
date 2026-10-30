@@ -16,6 +16,7 @@ from chanedge.app.compose import SystemClock, build_exchange, compose
 from chanedge.app.jev_warm import run_jev_warm, summarize_decisions
 from chanedge.app.paper_loop import (
     FileUniverse,
+    backtest_quality,
     ParquetBars,
     VisionFunding,
     download_history,
@@ -48,6 +49,8 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
         if settings.runtime.mode == "live":
             print("live mode is not implemented", file=sys.stderr)
             return 1
+        if args.command == "monitor":
+            return run_monitor(settings, Path(args.root))
         if args.command != "paper" and settings.universe.mode == "pin":
             print("pin does not run download, universe, backtest, or jev-warm", file=sys.stderr)
             return 1
@@ -89,6 +92,12 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
                 day = universe_date(app.clock.now(), settings.universe.refresh_minute)
                 ensure_daily_file(app, day)
         elif args.command == "backtest":
+            if settings.safety.kill_switch:
+                print(
+                    "warning: safety.kill_switch is true, so every entry is vetoed and the report "
+                    "will have no trades. Pass --overlay config/paper.yaml to backtest entries.",
+                    file=sys.stderr,
+                )
             outcome = run_backtest_command(app, vision_root=vision, end=end)
             if outcome.incomplete:
                 return 3
@@ -113,6 +122,28 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
         print(str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def run_monitor(settings, root: Path, *, call=None) -> int:
+    """Start the read-only monitor as its own process. app does not import its drawing code."""
+    import subprocess
+
+    host = settings.monitor.host
+    if host != "127.0.0.1":
+        print(f"monitor.host must be 127.0.0.1, not {host}", file=sys.stderr)
+        return 1
+    command = [
+        sys.executable,
+        "-m",
+        "chanedge.monitor",
+        "--db",
+        str(root / settings.journal.sqlite_path),
+        "--host",
+        host,
+        "--port",
+        str(settings.monitor.port),
+    ]
+    return (call or subprocess.call)(command)
 
 
 def run_backtest_command(app, *, vision_root: Path, end: date):
@@ -161,6 +192,7 @@ def run_backtest_command(app, *, vision_root: Path, end: date):
         overlap_penalty_above=channel.overlap_penalty_above,
         jev_weights=weights,
         funding_source=VisionFunding(vision_root),
+        quality=backtest_quality(settings),
         windows=_windows(settings),
         full_log=False,
         halt_on=halt,
@@ -236,4 +268,5 @@ def _parser() -> argparse.ArgumentParser:
     paper = commands.add_parser("paper", parents=[parent])
     paper.add_argument("--once", action="store_true")
     commands.add_parser("jev-warm", parents=[parent])
+    commands.add_parser("monitor", parents=[parent])
     return parser

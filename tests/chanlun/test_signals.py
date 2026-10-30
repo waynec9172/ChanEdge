@@ -265,3 +265,19 @@ def _dump_without_bi(signal) -> dict:
 
 def ignored_bars(bars, index):
     return bars[: index + 1]
+
+
+def test_inside_bars_after_confirmation_do_not_move_the_signal(bars_from_prices, config_hash) -> None:
+    # golden_multi_zs through index 11 (SECOND_BUY), then two bars contained in bar 11.
+    prices = [50, 60, 50, 40, 30, 37, 44, 50, 44, 38, 32, 37, 37, 37, 40]
+    bars = bars_from_prices(prices)
+    engine = ChanEngine(config_hash=config_hash, min_bi_bars=2)
+    first, _ = _prefix(engine, bars, 11)
+    emitted = [signal for signal in first.signals if signal.time == bars[11].close_time]
+    assert [signal.type for signal in emitted] == [SignalType.SECOND_BUY]
+    for index in (12, 13, 14):
+        snap, _ = _prefix(engine, bars, index)
+        assert _bar_signals(snap, bars[index]) == []
+        assert [signal.id for signal in snap.signals] == [emitted[0].id]
+        assert snap.signals[0].time == bars[11].close_time
+        assert snap.signals[0].price == emitted[0].price

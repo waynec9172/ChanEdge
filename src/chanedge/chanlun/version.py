@@ -14,4 +14,5 @@ ENGINE_VERSION = (
     "|second-buy-sell-no-first-class-point"
     "|third-buy-sell-no-reemit-on-endpoint-replace-keep-fields-except-related-bi-id"
     "|second-buy-sell-reemit-on-new-confirm-bar-when-price-holds-no-cap"
+    "|fenxing-confirms-on-first-raw-bar-of-right-merged-bar"
 )

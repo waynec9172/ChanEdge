@@ -245,3 +245,34 @@ def _bar(open_time: datetime, **overrides: object) -> Bar:
         values["open"] = overrides.pop("open_")
     values.update(overrides)
     return Bar(**values)  # type: ignore[arg-type]
+
+
+def test_tp1_fills_once_even_when_price_touches_it_again(tmp_path: Path) -> None:
+    from chanedge.domain.enums import PartialReason
+    from chanedge.domain.risk import PartialTarget
+    from chanedge.journal.book import JournalLedger
+
+    ledger = JournalLedger(tmp_path / "chanedge.sqlite")
+    broker = PaperBroker(ledger, initial_equity=Decimal("10000"))
+    plan = _plan(qty=Decimal("10")).model_copy(
+        update={"partial_targets": (PartialTarget(fraction=0.5, price=105.0, reason=PartialReason.PRIOR_SWING),)}
+    )
+    _queue(broker, qty=Decimal("10"), plan=plan)
+    reductions = []
+    for index in range(3):
+        bar = _bar(T0 + timedelta(minutes=15 * index), open_=104.0 if index else 100.0, high=106.0, low=99.5, close=105.0)
+        fills = match_bar(
+            broker.position(SYMBOL),
+            broker.pending_for(SYMBOL),
+            bar,
+            fee_bps=Decimal("5"),
+            slippage_bps=Decimal("0"),
+            arm_close=None,
+        )
+        reductions.extend(fill.qty for fill in fills if fill.partial_reason is not None)
+        broker.apply(fills)
+        ledger.commit(broker.take_flush())
+    assert reductions == [Decimal("5.00000000")]
+    assert broker.position(SYMBOL).qty == Decimal("5.00000000")
+    restarted = PaperBroker(ledger, initial_equity=Decimal("10000"))
+    assert restarted.position(SYMBOL).plan.partial_targets == ()

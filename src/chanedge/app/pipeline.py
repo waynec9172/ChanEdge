@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass
 from decimal import Decimal
 
-from chanedge.chanlun.engine import window_hash
+from chanedge.chanlun.engine import PENDING_ID, window_hash
 from chanedge.domain.accounting import quantize
 from chanedge.domain.bars import MultiTimeframeContext
 from chanedge.domain.canon import format_time_z
@@ -60,17 +60,38 @@ def run_pipeline(request: PipelineRequest, services: PipelineServices) -> Pipeli
         if request.group != _ENTRY or request.full_log:
             raise ValueError("15m window is empty")
         return _slim(request, services, None)
-    snap_15 = _reuse_or_compute(services, bars_15, Timeframe.M15, request.previous)
-    candidate, ambiguous_ids = select_candidate(snap_15.signals, request.decision_time)
-    slim = (
-        request.group == _ENTRY
-        and not request.full_log
-        and candidate is None
-        and len(ambiguous_ids) == 0
+    may_slim = request.group == _ENTRY and not request.full_log
+    snap_15 = _reuse_or_compute(
+        services, bars_15, Timeframe.M15, request.previous, identify=not may_slim
     )
+    candidate, ambiguous_ids = select_candidate(snap_15.signals, request.decision_time)
+    slim = may_slim and candidate is None and len(ambiguous_ids) == 0
     if slim:
-        return _slim(request, services, snap_15)
-    snapshots = {
+        result = _slim(request, services, snap_15)
+        if not request.shadow_positions:
+            return result
+        # The row stays slim. Open shadows still need this bar's review.
+        context = _context(request, _higher(services, request, snap_15))
+        return result.model_copy(
+            update={
+                "shadow_reviews": _shadow_reviews(services, request, context),
+                "bar_close": _bar_close(context, request),
+            }
+        )
+    snap_15 = _identify(services, snap_15)
+    snapshots = _higher(services, request, snap_15)
+    context = _context(request, snapshots)
+    if request.group == _EXIT:
+        result = _exit(request, services, context, snapshots, candidate, ambiguous_ids)
+    else:
+        result = _entry(request, services, context, snapshots, candidate, ambiguous_ids)
+    if request.shadow_positions and result.context is not None:
+        return _replace(result, shadow_reviews=_shadow_reviews(services, request, result.context))
+    return result
+
+
+def _higher(services: PipelineServices, request: PipelineRequest, snap_15):
+    return {
         Timeframe.M15: snap_15,
         Timeframe.H1: _reuse_or_compute(
             services, _required(request, Timeframe.H1), Timeframe.H1, request.previous
@@ -79,15 +100,10 @@ def run_pipeline(request: PipelineRequest, services: PipelineServices) -> Pipeli
             services, _required(request, Timeframe.H4), Timeframe.H4, request.previous
         ),
     }
-    context = _context(request, snapshots)
-    if request.group == _EXIT:
-        result = _exit(request, services, context, snapshots, candidate, ambiguous_ids)
-    else:
-        result = _entry(request, services, context, snapshots, candidate, ambiguous_ids)
-    if request.shadow_position is not None and result.context is not None:
-        review = services.risk.review_open(result.context, request.shadow_position)
-        return _replace(result, shadow_review=review)
-    return result
+
+
+def _shadow_reviews(services: PipelineServices, request: PipelineRequest, context):
+    return tuple(services.risk.review_open(context, position) for position in request.shadow_positions)
 
 
 def _flattened(request: PipelineRequest) -> PipelineResult:
@@ -110,7 +126,7 @@ def _flattened(request: PipelineRequest) -> PipelineResult:
         bar_close=None,
         order=None,
         snapshots={},
-        shadow_review=None,
+        shadow_reviews=(),
         include_ids=False,
     )
 
@@ -142,7 +158,7 @@ def _slim(request: PipelineRequest, services: PipelineServices, snap_15) -> Pipe
         bar_close=None,
         order=None,
         snapshots=snapshots,
-        shadow_review=None,
+        shadow_reviews=(),
         include_ids=False,
     )
 
@@ -208,7 +224,7 @@ def _exit(request, services, context, snapshots, candidate, ambiguous_ids):
             bar_close=bar_close,
             order=order,
             snapshots=snapshots,
-            shadow_review=None,
+            shadow_reviews=(),
             include_ids=True,
             size_qty=abs(request.position.qty),
             stop_price=quantize(request.position.stop_price),
@@ -238,7 +254,7 @@ def _exit(request, services, context, snapshots, candidate, ambiguous_ids):
             bar_close=bar_close,
             order=None,
             snapshots=snapshots,
-            shadow_review=None,
+            shadow_reviews=(),
             include_ids=True,
             stop_price=quantize(amend.new_stop_price),
         )
@@ -259,7 +275,7 @@ def _exit(request, services, context, snapshots, candidate, ambiguous_ids):
         bar_close=bar_close,
         order=None,
         snapshots=snapshots,
-        shadow_review=None,
+        shadow_reviews=(),
         include_ids=True,
         stop_price=quantize(request.position.stop_price),
     )
@@ -332,7 +348,7 @@ def _entry_after_preflight(
             bar_close=bar_close,
             order=None,
             snapshots=snapshots,
-            shadow_review=None,
+            shadow_reviews=(),
             include_ids=True,
         )
     assessment = services.jev.assess(features)
@@ -366,7 +382,7 @@ def _entry_after_preflight(
             bar_close=bar_close,
             order=None,
             snapshots=snapshots,
-            shadow_review=None,
+            shadow_reviews=(),
             include_ids=True,
         )
     if services.warm:
@@ -389,7 +405,7 @@ def _entry_after_preflight(
             bar_close=bar_close,
             order=None,
             snapshots=snapshots,
-            shadow_review=None,
+            shadow_reviews=(),
             include_ids=True,
         )
     rules = services.rules.evaluate(context, assessment, request.account, request.safety)
@@ -432,7 +448,7 @@ def _entry_from_rules(
             bar_close=bar_close,
             order=None,
             snapshots=snapshots,
-            shadow_review=None,
+            shadow_reviews=(),
             include_ids=True,
         )
     plan = services.risk.plan_entry(context, features, assessment, rules, request.account)
@@ -455,7 +471,7 @@ def _entry_from_rules(
             bar_close=bar_close,
             order=None,
             snapshots=snapshots,
-            shadow_review=None,
+            shadow_reviews=(),
             include_ids=True,
         )
     if assessment.candidate_side is Side.LONG:
@@ -509,7 +525,7 @@ def _entry_from_rules(
         bar_close=bar_close,
         order=order,
         snapshots=snapshots,
-        shadow_review=None,
+        shadow_reviews=(),
         include_ids=True,
     )
 
@@ -565,7 +581,7 @@ def _finish(
     bar_close,
     order,
     snapshots,
-    shadow_review,
+    shadow_reviews,
     include_ids: bool,
     size_qty: Decimal | None = None,
     stop_price: Decimal | None = None,
@@ -626,12 +642,12 @@ def _finish(
         bar_close=bar_close,
         order=order if submitted or not request.record else None,
         snapshots=snapshots,
-        shadow_review=shadow_review,
+        shadow_reviews=shadow_reviews,
         reason_steps=tuple(steps),
     )
 
 
-def _replace(result: PipelineResult, *, shadow_review) -> PipelineResult:
+def _replace(result: PipelineResult, *, shadow_reviews) -> PipelineResult:
     return PipelineResult(
         decision=result.decision,
         action=result.action,
@@ -649,7 +665,7 @@ def _replace(result: PipelineResult, *, shadow_review) -> PipelineResult:
         bar_close=result.bar_close,
         order=result.order,
         snapshots=result.snapshots,
-        shadow_review=shadow_review,
+        shadow_reviews=shadow_reviews,
         reason_steps=result.reason_steps,
     )
 
@@ -701,13 +717,29 @@ def _rule_steps(rules: HardRuleResult) -> tuple[ReasonStep, ...]:
     )
 
 
-def _reuse_or_compute(services: PipelineServices, bars, timeframe: Timeframe, previous):
+def _reuse_or_compute(
+    services: PipelineServices, bars, timeframe: Timeframe, previous, *, identify: bool = True
+):
     as_of = bars[-1].close_time
-    digest = window_hash(bars)
     prior = previous.get(timeframe)
-    if prior is not None and prior.as_of == as_of and prior.bar_window_hash == digest:
+    # Hash the window only when as_of already matches; the 15m window never does.
+    if (
+        prior is not None
+        and prior.snapshot_id != PENDING_ID
+        and prior.as_of == as_of
+        and prior.bar_window_hash == window_hash(bars)
+    ):
         return prior
+    if not identify and hasattr(services.engine, "identify"):
+        return services.engine.compute(bars, timeframe=timeframe, as_of=as_of, identify=False)
     return services.engine.compute(bars, timeframe=timeframe, as_of=as_of)
+
+
+def _identify(services: PipelineServices, snapshot):
+    """Slim rows skip snapshot_id. Anything that writes the id fills it in here."""
+    if snapshot.snapshot_id != PENDING_ID:
+        return snapshot
+    return services.engine.identify(snapshot)
 
 
 def _required(request: PipelineRequest, timeframe: Timeframe):

@@ -36,10 +36,10 @@ ChanEdge/
 | `rules` | `gate.py` | 硬否決。不改分數，不決定口數 |
 | `risk` | `size`、`stops`、`review` | 口數、結構止損、分批、移動停損、出場檢視 |
 | `execution` | `port.py`、`paper.py` | `Broker` 協定與 `PaperBroker`。沒有 `live.py`。不重算纏論，不自己寫撮合 |
-| `journal` | `schema`、`repository`、`book` | 決策、訂單、成交、持倉、現金、`ChartFrame` |
+| `journal` | `schema`、`repository`、`book`、`reader` | 決策、訂單、成交、持倉、現金、`ChartFrame`。`reader` 是給監控的唯讀 `chart_frames` 連線 |
 | `backtest` | `matcher`、`loop`、`report`、`shadow` | 步驟 1 與步驟 2 的撮合、回測迴圈、費用、報告、影子單 |
 | `app` | `bind`、`pipeline`、`compose`、`paper_loop`、`cli`、`jev_warm` | 把設定收成領域參數、共用的 `run_pipeline`、組合根、紙交易迴圈、CLI、`jev-warm`。預檢順序在 `pipeline` |
-| `monitor` | `__init__.py` 只有說明 | Phase 2 唯讀畫面。Phase 1 不啟動 |
+| `monitor` | `server`、`__main__`、`static/`（含 Lightweight Charts 4.2.3 與其 Apache-2.0 LICENSE） | Phase 2 唯讀畫面。另一個行程，只綁 `127.0.0.1`，只讀 `chart_frames`，GET／HEAD 以外一律 405 |
 
 `src/chanedge/__init__.py` 不匯入內部套件。
 
@@ -59,17 +59,17 @@ ChanEdge/
 | `tests/chanlun/` | 包含、筆、中樞凍結、信號。夾具在 `tests/fixtures/` |
 | `tests/features/`、`tests/jev/`、`tests/rules/`、`tests/risk/` | 六通道、評分、硬閘門、口數與出場 |
 | `tests/journal/` | SQLite 結構與 `ChartFrame` |
+| `tests/monitor/` | 監控只讀幀、只綁本機、沒有寫入路由、匯入圖只含 `domain` 與 `journal` |
 | `tests/backtest/` | 管線、撮合、回測迴圈、紙交易 Broker |
 | `tests/app/`、`tests/typesafe/` | 組合根、CLI、紙交易一輪、重啟、暖機門檻、JSONL 快取與假傳輸 |
 | `tests/fixtures/*.json` | 七個 golden。期望以架構稿與這些 JSON 為準 |
 
-`tests/monitor/` 與 `tests/execution/` 都不存在。紙交易 Broker 的測試在 `tests/backtest/test_paper.py`。`conftest.py` 只在 `tests/chanlun/`、`tests/features/`、`tests/marketdata/`。
+`tests/execution/` 不存在。監控的測試在 `tests/monitor/test_reads_frames.py`。紙交易 Broker 的測試在 `tests/backtest/test_paper.py`。`conftest.py` 只在 `tests/chanlun/`、`tests/features/`、`tests/marketdata/`。
 
 ## 規格目錄和樹上的差別
 
 這些差別是進度，不是規格寫錯：
 
-- §5.1 列出 `tests/monitor/`。PR-13 沒做，所以還沒有這個目錄。
 - §5.1 說 Phase 1 不建立可送單的 `execution/live.py`。樹上只有 `port.py` 與 `paper.py`。
 - `data/` 在 `.gitignore`。新鮮的工作目錄可以沒有它。
 - `app/pipeline.py` 與 `app/bind.py` 是實作計畫把管線與參數組裝放進 `app` 的結果。§5.1 只列到套件，沒有逐檔命名。

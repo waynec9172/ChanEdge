@@ -694,3 +694,21 @@ def _replace(root: object, path: tuple, new: object) -> object:
     raise TypeError(type(root))
 
 
+
+
+def test_negative_weight_is_rejected_even_when_the_sum_is_one(tmp_path: Path) -> None:
+    overlay = tmp_path / "negative.yaml"
+    overlay.write_text("jev:\n  weights:\n    structure: 0.60\n    location: -0.18\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=">= 0"):
+        load_settings(DEFAULT, overlay)
+
+
+def test_systemone_values_live_in_the_default_yaml() -> None:
+    import yaml
+
+    loaded = yaml.safe_load(DEFAULT.read_text(encoding="utf-8"))
+    assert loaded["systemone"]["enabled"] is False
+    assert loaded["systemone"]["model_pin"] == "jev-1.14.0"
+    from chanedge.config.model import SystemOneSettings
+
+    assert all(field.is_required() for field in SystemOneSettings.model_fields.values())
