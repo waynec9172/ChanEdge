@@ -15,6 +15,7 @@ from pathlib import Path
 
 from chanedge.app.compose import PaperApp
 from chanedge.app.pipeline import PipelineServices
+from chanedge.backtest.loop import effective_positions
 from chanedge.backtest.matcher import match_bar
 from chanedge.domain.accounting import mark_pnl, quantize
 from chanedge.domain.bars import DataQuality, Instrument, timeframe_duration
@@ -44,6 +45,7 @@ from chanedge.domain.serialize import dump_model, dump_models
 from chanedge.journal.repository import ChartFrameRow
 from chanedge.marketdata.ccxt_adapter import (
     CcxtMarketData,
+    is_usdt_perp,
     paper_daily_quotes,
     sync_closed_bars,
 )
@@ -61,7 +63,6 @@ from chanedge.marketdata.universe import members_from_selection, select_universe
 from chanedge.marketdata.vision import (
     download_start,
     funding_month_csv,
-    kline_files_for_month,
     ranking_open_time,
     read_daily_for_month,
     read_funding_month,
@@ -99,7 +100,7 @@ def run_paper_bar(app: PaperApp, *, decision_time: datetime, sleep) -> PaperBarR
     ran = []
     started = app.clock.now()
     jobs = _jobs(app, board, loaded[Timeframe.M15], decision_time, flattened)
-    effective = list(app.broker.open_positions())
+    effective = effective_positions(app.broker)
     marks = _marks(loaded[Timeframe.M15], decision_time)
     sequence = 0
     for group, symbol, is_flat in jobs:
@@ -245,24 +246,28 @@ def download_history(app: PaperApp, *, vision_root: Path, end: date) -> int:
     start = download_start(history, windows)
     symbols = _symbols_in_files(app.root, app.settings.runtime.venue, history, end)
     written = 0
-    clock = datetime(end.year, end.month, end.day, 23, 59, tzinfo=_UTC)
+    # The last 15m, 1h, and 4h bars of `end` close at 00:00 the next day.
+    clock = datetime(end.year, end.month, end.day, tzinfo=_UTC) + timedelta(days=1)
     for symbol in symbols:
         compact = symbol.replace("/", "")
         for timeframe, _window in windows.items():
-            for year, month in _months(start, clock):
-                bars = read_klines_for_month(
-                    vision_root,
-                    compact,
-                    timeframe.value,
-                    year,
-                    month,
-                    symbol=symbol,
-                    source=app.settings.runtime.venue,
-                    clock=clock,
+            collected = []
+            for year, month in _months(start, clock - timedelta(microseconds=1)):
+                collected.extend(
+                    read_klines_for_month(
+                        vision_root,
+                        compact,
+                        timeframe.value,
+                        year,
+                        month,
+                        symbol=symbol,
+                        source=app.settings.runtime.venue,
+                        clock=clock,
+                    )
                 )
-                if bars:
-                    app.store.write_closed(app.settings.runtime.venue, symbol, timeframe, bars)
-                    written += len(bars)
+            if collected:
+                app.store.merge_closed(app.settings.runtime.venue, symbol, timeframe, collected)
+                written += len(collected)
         for year, month in _months(start, clock):
             _copy_funding(vision_root, app.root, compact, year, month)
     return written
@@ -439,7 +444,7 @@ def _write_daily(app: PaperApp, day: date, path: Path) -> None:
     end = start + timedelta(days=1)
     quotes = []
     for item in markets:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not is_usdt_perp(item):
             continue
         venue_symbol = item.get("symbol")
         if not isinstance(venue_symbol, str):
@@ -1001,12 +1006,12 @@ def _kline_text(root: Path, symbol: str) -> str | None:
     compact = symbol.replace("/", "")
     for interval in ("15m", "1h", "4h"):
         folder = root / "data" / "futures" / "um" / "monthly" / "klines" / compact / interval
-        if not folder.is_dir():
-            continue
-        files = sorted(folder.glob("*.csv"))
+        files = sorted(folder.glob("*.csv")) if folder.is_dir() else []
         if files:
             return files[0].read_text(encoding="utf-8")
-        found = kline_files_for_month(root, compact, interval, 2024, 1)
-        if found:
-            return found[0].read_text(encoding="utf-8")
+    for interval in ("15m", "1h", "4h"):
+        daily = root / "data" / "futures" / "um" / "daily" / "klines" / compact / interval
+        files = sorted(daily.glob("*.csv")) if daily.is_dir() else []
+        if files:
+            return files[0].read_text(encoding="utf-8")
     return None

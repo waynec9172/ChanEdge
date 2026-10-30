@@ -831,3 +831,29 @@ def test_two_shadows_on_one_symbol_each_run_to_their_own_exit() -> None:
     assert [row["signal_id"] for row in book.rows] == [first.id, second.id]
     assert book.rows[0]["closed"] is True and book.rows[0]["exit_reason"] == "structure_stop"
     assert book.rows[1]["unfinished"] is True
+
+
+def test_effective_positions_count_unfilled_entries_and_drop_pending_exits() -> None:
+    from chanedge.backtest.loop import effective_positions
+    from chanedge.domain.decision import OrderIntent
+    from chanedge.domain.enums import OrderSide
+
+    broker = _broker()
+    held = _held("ETH/USDT")
+    broker.seed(held)
+    plan = _held("BTC/USDT", entry=100.0, stop=95.0, qty=Decimal("2")).plan
+    entry = OrderIntent(
+        intent_id="dec-btc", decision_id="dec-btc", symbol="BTC/USDT", side=OrderSide.BUY,
+        order_type="market", qty=Decimal("2"), reduce_only=False, client_order_id="dec-btc",
+    )
+    broker.queue_order(entry, group_order=0, plan=plan, entry_decision_time=T0, submitted_at=T0)
+    found = effective_positions(broker)
+    assert sorted(item.symbol for item in found) == ["BTC/USDT", "ETH/USDT"]
+    btc = next(item for item in found if item.symbol == "BTC/USDT")
+    assert btc.qty == Decimal("2") and btc.avg_price == 100.0
+    exit_order = OrderIntent(
+        intent_id="dec-eth", decision_id="dec-eth", symbol="ETH/USDT", side=OrderSide.SELL,
+        order_type="market", qty=held.qty, reduce_only=True, client_order_id="dec-eth",
+    )
+    broker.queue_order(exit_order, group_order=0, submitted_at=T0)
+    assert [item.symbol for item in effective_positions(broker)] == ["BTC/USDT"]

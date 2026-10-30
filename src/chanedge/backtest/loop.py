@@ -148,7 +148,7 @@ def run_backtest(
         if broker.open_symbols():
             exposure += 1
         jobs = _jobs(broker, shadow, board, store[Timeframe.M15], decision_time, flattened)
-        effective = list(broker.open_positions())
+        effective = effective_positions(broker)
         sequence = 0
         bar_decisions: list[DecisionRecord] = []
         for group, symbol, is_flat in jobs:
@@ -416,6 +416,40 @@ def _view(broker, effective, marks) -> AccountView:
         open_position_count=count,
         gross_notional_quote=quantize(gross),
     )
+
+
+def effective_positions(broker) -> list[PositionState]:
+    """Open positions plus next_open orders that matching could not fill yet.
+
+    A pending exit takes its position out of the count. A pending entry counts
+    at qty x entry_reference. Orders normally fill in step 1; this covers a
+    symbol with no bar this decision and the first bar after a restart.
+    """
+    pending = [order for symbol in broker.pending_symbols() for order in broker.pending_for(symbol)]
+    exiting = {order.symbol for order in pending if order.reduce_only}
+    effective = [position for position in broker.open_positions() if position.symbol not in exiting]
+    held = {position.symbol for position in effective}
+    for order in pending:
+        plan = order.plan
+        if order.reduce_only or order.symbol in held or plan is None:
+            continue
+        if plan.entry_reference is None or plan.structure_stop_price is None or order.entry_decision_time is None:
+            continue
+        qty = order.qty if plan.side is Side.LONG else -order.qty
+        effective.append(
+            PositionState(
+                symbol=order.symbol,
+                qty=qty,
+                avg_price=float(plan.entry_reference),
+                stop_price=float(plan.structure_stop_price),
+                plan=plan,
+                entry_decision_id=order.decision_id,
+                entry_decision_time=order.entry_decision_time,
+                entry_bar_open_time=order.entry_decision_time,
+            )
+        )
+        held.add(order.symbol)
+    return effective
 
 
 def _apply_effective(effective, result):

@@ -62,3 +62,14 @@ def test_failed_replace_does_not_publish_the_parquet(tmp_path, make_bar) -> None
     stored = store.read("binanceusdm", "BTC/USDT", Timeframe.M15)
     assert len(stored) == 1
     assert stored[0].bar.open_time == original.bar.open_time
+
+
+def test_merge_keeps_bars_after_the_incoming_range(tmp_path, make_bar) -> None:
+    store = ParquetBarStore(tmp_path)
+    times = [T0 + timedelta(minutes=15 * index) for index in range(4)]
+    store.write_closed("binanceusdm", "BTC/USDT", Timeframe.M15, [store_bar(make_bar(open_time=t)) for t in times])
+    revised = store_bar(make_bar(open_time=times[1], close=102.0, high=103.0))
+    store.merge_closed("binanceusdm", "BTC/USDT", Timeframe.M15, [store_bar(make_bar(open_time=times[0])), revised])
+    stored = store.read("binanceusdm", "BTC/USDT", Timeframe.M15)
+    assert [item.bar.open_time for item in stored] == times
+    assert stored[1].bar.close == 102.0

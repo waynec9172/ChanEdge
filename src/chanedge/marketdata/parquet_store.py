@@ -106,6 +106,34 @@ class ParquetBarStore:
         merged = [by_open[key] for key in sorted(by_open)]
         self._write(path, merged)
 
+    def merge_closed(
+        self,
+        venue: str,
+        symbol: str,
+        timeframe: Timeframe,
+        incoming: Sequence[StoredBar],
+    ) -> None:
+        """Replace only open_times inside the incoming [first, last] range.
+
+        download writes vision history this way, so bars after the range (for
+        example newer paper bars from ccxt) stay. Unclosed bars are not written.
+        """
+        closed = [item for item in incoming if item.bar.is_closed]
+        if not closed:
+            return
+        path = self.path(venue, symbol, timeframe)
+        existing = list(self.read(venue, symbol, timeframe)) if path.exists() else []
+        first = min(item.bar.open_time for item in closed)
+        last = max(item.bar.open_time for item in closed)
+        by_open = {
+            item.bar.open_time: item
+            for item in existing
+            if item.bar.open_time < first or item.bar.open_time > last
+        }
+        for item in closed:
+            by_open[item.bar.open_time] = item
+        self._write(path, [by_open[key] for key in sorted(by_open)])
+
     def _write(self, path: Path, bars: Sequence[StoredBar]) -> None:
         table = pa.Table.from_pylist([_row_from_bar(item.bar) for item in bars], schema=_SCHEMA)
         sink = pa.BufferOutputStream()
