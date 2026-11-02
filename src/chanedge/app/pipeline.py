@@ -70,14 +70,14 @@ def run_pipeline(request: PipelineRequest, services: PipelineServices) -> Pipeli
     )
     if slim:
         return _slim(request, services, snap_15)
+    bars_1h = tuple(request.bars.get(Timeframe.H1, ()))
+    bars_4h = tuple(request.bars.get(Timeframe.H4, ()))
+    if not bars_1h or not bars_4h:
+        return _short_history(request, services, snap_15)
     snapshots = {
         Timeframe.M15: snap_15,
-        Timeframe.H1: _reuse_or_compute(
-            services, _required(request, Timeframe.H1), Timeframe.H1, request.previous
-        ),
-        Timeframe.H4: _reuse_or_compute(
-            services, _required(request, Timeframe.H4), Timeframe.H4, request.previous
-        ),
+        Timeframe.H1: _reuse_or_compute(services, bars_1h, Timeframe.H1, request.previous),
+        Timeframe.H4: _reuse_or_compute(services, bars_4h, Timeframe.H4, request.previous),
     }
     context = _context(request, snapshots)
     if request.group == _EXIT:
@@ -144,6 +144,39 @@ def _slim(request: PipelineRequest, services: PipelineServices, snap_15) -> Pipe
         snapshots=snapshots,
         shadow_review=None,
         include_ids=False,
+    )
+
+
+def _short_history(request: PipelineRequest, services: PipelineServices, snap_15) -> PipelineResult:
+    """A 1H or 4H window is empty, so no context can be built. HOLD on the data vetoes.
+
+    A new listing or an unfilled history lands here instead of raising out of the
+    paper loop. The frozen stop and TP1 still match; only this bar's review waits.
+    """
+    rules = HardRuleResult(passed=False, vetoes=tuple(_data_vetoes(request, services.rule_params)))
+    steps = tuple(
+        ReasonStep(stage=ReasonStage.DATA, code=veto.code.value, detail=veto.message)
+        for veto in rules.vetoes
+    )
+    return _finish(
+        request,
+        action=DecisionAction.HOLD,
+        steps=steps,
+        submitted=False,
+        candidate=None,
+        ambiguous=False,
+        features=None,
+        assessment=None,
+        rules=rules,
+        plan=None,
+        context=None,
+        amend=None,
+        bar_close=None,
+        order=None,
+        snapshots={Timeframe.M15: snap_15},
+        shadow_review=None,
+        include_ids=False,
+        stop_price=None if request.position is None else quantize(request.position.stop_price),
     )
 
 
@@ -655,6 +688,13 @@ def _replace(result: PipelineResult, *, shadow_review) -> PipelineResult:
 
 
 def _slim_rules(request: PipelineRequest, params: RuleParams) -> HardRuleResult:
+    vetoes = _data_vetoes(request, params)
+    vetoes.append(Veto(code=VetoCode.NO_CANDIDATE, message="no 15m candidate", measured="none", threshold="one"))
+    return HardRuleResult(passed=False, vetoes=tuple(vetoes))
+
+
+def _data_vetoes(request: PipelineRequest, params: RuleParams) -> list[Veto]:
+    """STALE_DATA, GAP_DATA, and INSUFFICIENT_HISTORY, in that order."""
     vetoes: list[Veto] = []
     quality = request.data_quality
     if quality.stale:
@@ -682,8 +722,7 @@ def _slim_rules(request: PipelineRequest, params: RuleParams) -> HardRuleResult:
                 threshold=threshold,
             )
         )
-    vetoes.append(Veto(code=VetoCode.NO_CANDIDATE, message="no 15m candidate", measured="none", threshold="one"))
-    return HardRuleResult(passed=False, vetoes=tuple(vetoes))
+    return vetoes
 
 
 def _with_entry_kill(rules: HardRuleResult) -> HardRuleResult:
@@ -708,13 +747,6 @@ def _reuse_or_compute(services: PipelineServices, bars, timeframe: Timeframe, pr
     if prior is not None and prior.as_of == as_of and prior.bar_window_hash == digest:
         return prior
     return services.engine.compute(bars, timeframe=timeframe, as_of=as_of)
-
-
-def _required(request: PipelineRequest, timeframe: Timeframe):
-    bars = tuple(request.bars.get(timeframe, ()))
-    if not bars:
-        raise ValueError("higher timeframe window is empty")
-    return bars
 
 
 def _context(request: PipelineRequest, snapshots) -> MultiTimeframeContext:

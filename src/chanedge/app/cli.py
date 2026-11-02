@@ -18,6 +18,7 @@ from chanedge.app.paper_loop import (
     FileUniverse,
     ParquetBars,
     VisionFunding,
+    backtest_quality,
     download_history,
     ensure_daily_file,
     inferred_instrument,
@@ -162,6 +163,7 @@ def run_backtest_command(app, *, vision_root: Path, end: date):
         jev_weights=weights,
         funding_source=VisionFunding(vision_root),
         windows=_windows(settings),
+        quality=backtest_quality(settings),
         full_log=False,
         halt_on=halt,
     )

@@ -44,6 +44,7 @@ from chanedge.domain.serialize import dump_model, dump_models
 from chanedge.journal.repository import ChartFrameRow
 from chanedge.marketdata.ccxt_adapter import (
     CcxtMarketData,
+    is_usdt_perp,
     paper_daily_quotes,
     sync_closed_bars,
 )
@@ -81,28 +82,48 @@ class PaperBarResult:
 
 
 def run_paper_bar(app: PaperApp, *, decision_time: datetime, sleep) -> PaperBarResult:
-    """Wait out the close, sync bars, match, then exit group and entry group."""
+    """Wait out the close, sync bars, match, then exit group and entry group.
+
+    Staleness is per symbol. A symbol whose bar never arrived gets a STALE_DATA
+    HOLD; the others still match their stops and run the pipeline. A next_open
+    order queued while its symbol was ranked still fills at the next open after
+    the symbol leaves the board, as in the backtest; the position it opens is
+    then managed by the exit group as a dropped holding.
+    """
     board = _board(app, decision_time)
     if board is None:
         return PaperBarResult(started=False, decisions=(), stale=False)
-    watched = tuple(sorted(set(board) | set(app.broker.open_symbols())))
+    watched = tuple(
+        sorted(set(board) | set(app.broker.open_symbols()) | set(app.broker.pending_symbols()))
+    )
     expected_open = decision_time - timeframe_duration(Timeframe.M15)
     sleep(app.settings.marketdata.close_wait_seconds)
+    waiting = list(watched)
     while True:
-        for symbol in watched:
+        for symbol in waiting:
             _sync_symbol(app, symbol, decision_time)
-        if not watched or _bars_arrived(app, watched, decision_time, expected_open):
+        waiting = [
+            symbol for symbol in waiting if _latest_open(app, symbol, decision_time) != expected_open
+        ]
+        if not waiting:
             break
         now = app.clock.now()
-        last_close = _last_close(app, watched, decision_time)
-        if is_stale(now, last_close, stale_grace_seconds=app.settings.marketdata.stale_grace_seconds):
-            decisions = _stale_holds(app, watched, decision_time, board)
-            _commit(app, decisions)
-            return PaperBarResult(started=True, decisions=tuple(decisions), stale=True)
+        grace = app.settings.marketdata.stale_grace_seconds
+        if all(
+            is_stale(now, _last_close(app, symbol, expected_open), stale_grace_seconds=grace)
+            for symbol in waiting
+        ):
+            break
         sleep(app.settings.marketdata.close_wait_seconds)
-    loaded = _load_windows(app, watched, decision_time)
+    stale = set(waiting)
+    ready = tuple(symbol for symbol in watched if symbol not in stale)
+    # A symbol watched only for its pending order gets no decision row, stale or not.
+    held = set(board) | set(app.broker.open_symbols())
+    decisions: list[DecisionRecord] = _stale_holds(
+        app, sorted(stale & held), decision_time, board
+    )
+    loaded = _load_windows(app, ready, decision_time)
     flattened = _match_all(app, loaded[Timeframe.M15], decision_time)
-    decisions: list[DecisionRecord] = []
     ran = []
     started = app.clock.now()
     jobs = _jobs(app, board, loaded[Timeframe.M15], decision_time, flattened)
@@ -163,7 +184,7 @@ def run_paper_bar(app: PaperApp, *, decision_time: datetime, sleep) -> PaperBarR
         _log_decision(app, result.decision, bucket)
     _commit(app, decisions)
     _frames(app, ran, board, decision_time)
-    return PaperBarResult(started=True, decisions=tuple(decisions), stale=False)
+    return PaperBarResult(started=True, decisions=tuple(decisions), stale=bool(stale))
 
 
 def serve(app: PaperApp, *, sleep=time.sleep) -> None:
@@ -394,7 +415,7 @@ def _board(app: PaperApp, decision_time: datetime) -> dict[str, int] | None:
         return {item.symbol: index for index, item in enumerate(pins, start=1)}
     day = universe_date(decision_time, app.settings.universe.refresh_minute)
     if not ensure_daily_file(app, day):
-        if not app.broker.open_symbols():
+        if not app.broker.open_symbols() and not app.broker.pending_symbols():
             return None
         return {}
     path = universe_path(app.root, app.settings.runtime.venue, day)
@@ -409,7 +430,7 @@ def _write_daily(app: PaperApp, day: date, path: Path) -> None:
     end = start + timedelta(days=1)
     quotes = []
     for item in markets:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not is_usdt_perp(item):
             continue
         venue_symbol = item.get("symbol")
         if not isinstance(venue_symbol, str):
@@ -456,13 +477,6 @@ def _listed(app: PaperApp) -> set[str]:
     return set(app.instruments)
 
 
-def _bars_arrived(app: PaperApp, symbols, decision_time: datetime, expected_open: datetime) -> bool:
-    for symbol in symbols:
-        if _latest_open(app, symbol, decision_time) != expected_open:
-            return False
-    return True
-
-
 def _latest_open(app: PaperApp, symbol: str, decision_time: datetime) -> datetime | None:
     latest = None
     for bar in _stored(app, symbol, Timeframe.M15):
@@ -471,13 +485,13 @@ def _latest_open(app: PaperApp, symbol: str, decision_time: datetime) -> datetim
     return latest
 
 
-def _last_close(app: PaperApp, symbols, decision_time: datetime) -> datetime:
+def _last_close(app: PaperApp, symbol: str, expected_open: datetime) -> datetime:
+    """This symbol's last 15m close before the expected bar. No bars counts as the bar before it."""
     latest = None
-    for symbol in symbols:
-        for bar in _stored(app, symbol, Timeframe.M15):
-            if bar.is_closed and (latest is None or bar.close_time > latest):
-                latest = bar.close_time
-    return decision_time if latest is None else latest
+    for bar in _stored(app, symbol, Timeframe.M15):
+        if bar.is_closed and bar.close_time <= expected_open and (latest is None or bar.close_time > latest):
+            latest = bar.close_time
+    return expected_open if latest is None else latest
 
 
 def _stored(app: PaperApp, symbol: str, timeframe: Timeframe):
@@ -517,6 +531,7 @@ def _match_all(app: PaperApp, bars, decision_time: datetime) -> set[str]:
             fee_bps=fee,
             slippage_bps=slip,
             arm_close=app.broker.arm_close(symbol),
+            tp1_filled=app.broker.tp1_filled(symbol),
         )
         if matched:
             app.broker.apply(matched)
@@ -674,6 +689,17 @@ def _quality(app: PaperApp, bars) -> DataQuality:
         stale_grace_seconds=app.settings.marketdata.stale_grace_seconds,
         backtest=False,
     )
+
+
+def backtest_quality(settings):
+    """Gap check on the 15m, 1H, and 4H decision windows for the backtest loop. Never stale."""
+    gaps = _gaps(settings)
+
+    def quality(symbol, decision_time, windows):
+        del symbol, decision_time
+        return assess_quality(windows, max_gap_bars=gaps, backtest=True)
+
+    return quality
 
 
 def _instrument(app: PaperApp, symbol: str) -> Instrument:

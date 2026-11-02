@@ -1,7 +1,9 @@
 """Paper ccxt rows. Tests pass a fake exchange. This module does not open a socket.
 
 fetch_tickers is available for tests. Ranking does not call it. Daily klines use
-fetch_ohlcv timeframe 1d. A 6-column row has no quote_volume and stays empty.
+the raw Binance klines endpoint when the exchange has it, because unified
+fetch_ohlcv drops the quote volume column. A 6-column row has no quote_volume
+and stays empty.
 """
 
 from __future__ import annotations
@@ -89,8 +91,13 @@ class CcxtMarketData:
         end: datetime,
     ) -> tuple[DailyQuote, ...]:
         since = _millis(start)
-        rows = self._exchange.fetch_ohlcv(venue_symbol, "1d", since, None)  # type: ignore[attr-defined]
         compact = _compact_from_venue_symbol(venue_symbol)
+        raw = getattr(self._exchange, "fapiPublicGetKlines", None)
+        if callable(raw):
+            # Raw rows keep Binance's layout: index 7 is the quote asset volume.
+            rows = raw({"symbol": compact, "interval": "1d", "startTime": since, "endTime": _millis(end) - 1})
+        else:
+            rows = self._exchange.fetch_ohlcv(venue_symbol, "1d", since, None)  # type: ignore[attr-defined]
         quotes: list[DailyQuote] = []
         for row in rows:
             open_time = utc_from_millis(_millis_cell(row[0]))
@@ -171,10 +178,10 @@ def paper_daily_quotes(
     by_compact = {quote.compact_symbol: quote for quote in quotes}
     selected: list[DailyQuote] = []
     for market in markets:
-        if not (market.get("swap") is True and market.get("linear") is True and market.get("settle") == "USDT"):
+        if not is_usdt_perp(market):
             continue
         base = market.get("base")
-        if not isinstance(base, str) or market.get("quote") != "USDT":
+        if not isinstance(base, str):
             continue
         compact = base + "USDT"
         if not symbol_allowed(compact, exclude_bases):
@@ -196,8 +203,31 @@ def paper_daily_quotes(
     return tuple(selected)
 
 
-def instrument_from_market(market: Mapping[str, object], *, venue: str = "binanceusdm") -> Instrument:
-    """limits.amount.min, limits.cost.min, and precision ticks. Source is exchange."""
+def is_usdt_perp(market: Mapping[str, object]) -> bool:
+    """Swap, linear, quoted and settled in USDT. USDC perps and dated futures are not."""
+    return (
+        market.get("swap") is True
+        and market.get("linear") is True
+        and market.get("quote") == "USDT"
+        and market.get("settle") == "USDT"
+    )
+
+
+def instrument_from_market(
+    market: Mapping[str, object],
+    *,
+    venue: str = "binanceusdm",
+    leverage_fallback: int | None = None,
+) -> Instrument:
+    """limits.amount.min, limits.cost.min, and precision ticks. Source is exchange.
+
+    ccxt's Binance parser leaves limits.leverage.max as None. Sizing reads
+    risk.max_leverage, not this field, so the caller passes that as the fallback.
+    Only USDT perpetuals are accepted. Every instrument is keyed {base}/USDT, so a
+    USDC perp or a dated future for the same base would otherwise replace it.
+    """
+    if not is_usdt_perp(market):
+        raise ValueError("market is not a USDT-settled linear perpetual")
     base = market.get("base")
     if not isinstance(base, str) or base == "":
         raise ValueError("market base is required")
@@ -213,9 +243,7 @@ def instrument_from_market(market: Mapping[str, object], *, venue: str = "binanc
     precision = market.get("precision") if isinstance(market.get("precision"), Mapping) else {}
     assert isinstance(amount, Mapping) and isinstance(cost, Mapping)
     assert isinstance(leverage, Mapping) and isinstance(precision, Mapping)
-    leverage_max = leverage.get("max")
-    if isinstance(leverage_max, bool) or not isinstance(leverage_max, int) or leverage_max < 1:
-        raise ValueError("market leverage max is required")
+    leverage_max = _leverage(leverage.get("max"), leverage_fallback)
     settle = market.get("settle")
     margin = settle if isinstance(settle, str) and settle else "USDT"
     return Instrument(
@@ -232,6 +260,17 @@ def instrument_from_market(market: Mapping[str, object], *, venue: str = "binanc
         leverage_max=leverage_max,
         instrument_source=InstrumentSource.EXCHANGE,
     )
+
+
+def _leverage(value: object, fallback: int | None) -> int:
+    if value is None:
+        if fallback is None or fallback < 1:
+            raise ValueError("market leverage max is required")
+        return fallback
+    number = _decimal(value)
+    if number is None or number < 1 or number != number.to_integral_value():
+        raise ValueError("market leverage max must be a positive integer")
+    return int(number)
 
 
 def _quote_cell(row: Sequence[object]) -> Decimal | None:

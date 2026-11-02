@@ -14,6 +14,7 @@ from chanedge.app.bind import feature_params, jev_params, risk_params, rule_para
 from chanedge.app.cli import main, run_backtest_command
 from chanedge.app.compose import build_exchange, compose, drop_secrets
 from chanedge.app.paper_loop import (
+    backtest_quality,
     ensure_daily_file,
     reconcile_report,
     reconstruct_history,
@@ -859,3 +860,43 @@ def test_startup_target_and_universe_date_follow_the_close(tmp_path: Path) -> No
     assert startup_target(datetime(2024, 1, 1, 0, 15, 4, tzinfo=UTC), 3) == datetime(2024, 1, 1, 0, 30, tzinfo=UTC)
     assert universe_date(datetime(2024, 1, 1, 0, 4, tzinfo=UTC), 5) == YESTERDAY
     assert universe_date(datetime(2024, 1, 1, 0, 5, tzinfo=UTC), 5) == DAY
+
+
+def test_backtest_quality_checks_all_three_windows_and_is_never_stale() -> None:
+    settings = load_settings(ROOT / "config" / "default.yaml")
+    quality = backtest_quality(settings)
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+
+    def series(timeframe: Timeframe, count: int, skip: tuple[int, ...] = ()) -> tuple[Bar, ...]:
+        step = timeframe_duration(timeframe)
+        return tuple(
+            Bar(
+                symbol="BTC/USDT",
+                timeframe=timeframe,
+                open_time=start + index * step,
+                close_time=start + (index + 1) * step,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0,
+                volume=1.0,
+                is_closed=True,
+                source="binanceusdm",
+            )
+            for index in range(count)
+            if index not in skip
+        )
+
+    whole = {
+        Timeframe.M15: series(Timeframe.M15, 10),
+        Timeframe.H1: series(Timeframe.H1, 10),
+        Timeframe.H4: series(Timeframe.H4, 10),
+    }
+    clean = quality("BTC/USDT", start, whole)
+    assert clean.reasons == ()
+    assert clean.stale is False
+    gapped = dict(whole)
+    gapped[Timeframe.H1] = series(Timeframe.H1, 12, skip=(3, 4, 5, 6, 7, 8, 9))
+    found = quality("BTC/USDT", start, gapped)
+    assert found.reasons == ("gap_data",)
+    assert found.missing_bar_count == 7

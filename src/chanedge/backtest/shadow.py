@@ -21,6 +21,7 @@ class ShadowBook:
         self.positions: dict[str, PositionState] = {}
         self.pending: dict[str, PendingOrder] = {}
         self.arm: dict[str, float | None] = {}
+        self.tp1: set[str] = set()
         self.rows: list[dict[str, object]] = []
         self._open: dict[str, dict[str, object]] = {}
 
@@ -133,6 +134,7 @@ class ShadowBook:
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
             arm_close=self.arm.get(symbol),
+            tp1_filled=symbol in self.tp1,
         )
         for fill in fills:
             self._apply(fill)
@@ -177,6 +179,7 @@ class ShadowBook:
                 entry_decision_time=pending.entry_decision_time,
                 entry_bar_open_time=fill.fill_time,
             )
+            self.tp1.discard(fill.symbol)
             if row is not None:
                 row["entry_price"] = format(fill.price, ".8f")
             return
@@ -186,6 +189,7 @@ class ShadowBook:
         if new_qty == _ZERO:
             self.positions.pop(fill.symbol, None)
             self.arm.pop(fill.symbol, None)
+            self.tp1.discard(fill.symbol)
             if row is not None:
                 row["closed"] = True
                 row["unfinished"] = False
@@ -195,6 +199,8 @@ class ShadowBook:
                 self._open.pop(fill.symbol, None)
             return
         self.positions[fill.symbol] = updated
+        if fill.partial_reason is not None:
+            self.tp1.add(fill.symbol)
 
     def _amend_reason(self, symbol: str, amend: AmendStop, bar_close: float | None) -> None:
         replace = str(amend.reason) == "breakeven"

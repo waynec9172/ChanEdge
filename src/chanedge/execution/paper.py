@@ -107,6 +107,7 @@ class PaperBroker:
         self.order_type = order_type
         self._positions: dict[str, PositionState] = {}
         self._arm: dict[str, float | None] = {}
+        self._tp1: set[str] = set()
         self._pending: dict[str, PendingOrder] = {}
         self._orders: list[OrderRecord] = []
         self._fills: list[FillRecord] = []
@@ -212,6 +213,9 @@ class PaperBroker:
     def arm_close(self, symbol: str) -> float | None:
         return self._arm.get(symbol)
 
+    def tp1_filled(self, symbol: str) -> bool:
+        return symbol in self._tp1
+
     def seed(self, position: PositionState, *, arm_close: float | None = None) -> None:
         self._positions[position.symbol] = position
         if arm_close is not None:
@@ -301,8 +305,13 @@ class PaperBroker:
         if new_qty == _ZERO:
             self._positions.pop(fill.symbol, None)
             self._arm.pop(fill.symbol, None)
+            self._tp1.discard(fill.symbol)
         else:
             self._positions[fill.symbol] = updated
+            if not fill.reduce_only:
+                self._tp1.discard(fill.symbol)
+            elif fill.partial_reason is not None:
+                self._tp1.add(fill.symbol)
         if pending is not None:
             self._pending.pop(fill.client_order_id, None)
             self._orders.append(
@@ -359,6 +368,11 @@ class PaperBroker:
         for order in self._ledger.load_pending_orders():
             self._pending[order.client_order_id] = order
         fills = self._ledger.load_joined_fills()
+        # The fills table is the record that TP1 already reduced this position.
+        reduced = {fill.client_order_id for fill in fills}
+        for symbol, position in self._positions.items():
+            if position.entry_decision_id + ":tp1" in reduced:
+                self._tp1.add(symbol)
         if fills:
             cash = _replay(self._initial, fills)
             stored_cash = self._ledger.get_cash()

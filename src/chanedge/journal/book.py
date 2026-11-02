@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from chanedge.domain.canon import format_fixed8, format_time_z
-from chanedge.domain.enums import OrderSide
+from chanedge.domain.enums import ExitReason, OrderSide
 from chanedge.domain.records import (
     BarCommit,
     BookFlush,
@@ -49,8 +49,22 @@ class JournalLedger:
         return tuple(loaded)
 
     def load_pending_orders(self) -> tuple[PendingOrder, ...]:
+        """The orders table has no plan. The decision row committed with the order does."""
         pending: list[PendingOrder] = []
         for row in self.repo.load_pending_orders():
+            decision = self.repo.get_decision(row.decision_id)
+            if decision is None:
+                raise ValueError(f"pending order {row.client_order_id} has no decision row")
+            plan = None
+            entry_time = None
+            exit_reason = None
+            if row.reduce_only:
+                exit_reason = _exit_reason(decision.reason_chain_json)
+            else:
+                if decision.risk_plan_json is None:
+                    raise ValueError(f"pending entry {row.client_order_id} has no risk plan")
+                plan = RiskPlan.model_validate_json(decision.risk_plan_json)
+                entry_time = decision.decision_time
             pending.append(
                 PendingOrder(
                     client_order_id=row.client_order_id,
@@ -60,9 +74,9 @@ class JournalLedger:
                     qty=row.qty,
                     reduce_only=row.reduce_only,
                     group_order=0,
-                    exit_reason=None,
-                    plan=None,
-                    entry_decision_time=None,
+                    exit_reason=exit_reason,
+                    plan=plan,
+                    entry_decision_time=entry_time,
                     submitted_at=row.submitted_at,
                 )
             )
@@ -279,6 +293,20 @@ def _decode_position(payload: str, row: PositionRow) -> tuple[PositionState, flo
         entry_bar_open_time=row.entry_bar_open_time,
     )
     return state, arm_close
+
+
+def _exit_reason(payload: str | None) -> ExitReason | None:
+    """An EXIT decision's reason chain carries the exit reason as a step code."""
+    if not payload:
+        return None
+    steps = json.loads(payload)
+    if not isinstance(steps, list):
+        return None
+    known = {item.value for item in ExitReason}
+    for step in steps:
+        if isinstance(step, dict) and step.get("code") in known:
+            return ExitReason(step["code"])
+    return None
 
 
 def _parse_z(value: str):

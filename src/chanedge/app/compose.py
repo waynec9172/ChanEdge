@@ -175,7 +175,9 @@ def compose(
         feature_version=FEATURE_VERSION,
         marketdata_version=MARKETDATA_VERSION,
         safety=SafetyState(kill_switch=settings.safety.kill_switch, mode=RuntimeMode.PAPER),
-        instruments=instruments_from_exchange(exchange, settings.runtime.venue),
+        instruments=instruments_from_exchange(
+            exchange, settings.runtime.venue, leverage_fallback=settings.risk.max_leverage
+        ),
         log=configure_logging(),
         systemone_reader=reader,
         systemone_client=client,
@@ -191,7 +193,9 @@ def _require_version_pair(settings) -> None:
         raise RuntimeError("systemone.enabled false requires jev.version weighted-v1")
 
 
-def instruments_from_exchange(exchange: object, venue: str) -> dict[str, Instrument]:
+def instruments_from_exchange(
+    exchange: object, venue: str, *, leverage_fallback: int | None = None
+) -> dict[str, Instrument]:
     load = getattr(exchange, "load_markets", None)
     if load is None:
         return {}
@@ -201,7 +205,9 @@ def instruments_from_exchange(exchange: object, venue: str) -> dict[str, Instrum
         if not isinstance(market, dict):
             continue
         try:
-            instrument = instrument_from_market(market, venue=venue)
+            instrument = instrument_from_market(
+                market, venue=venue, leverage_fallback=leverage_fallback
+            )
         except (TypeError, ValueError):
             continue
         found[instrument.symbol] = instrument

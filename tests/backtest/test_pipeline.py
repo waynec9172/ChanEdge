@@ -141,8 +141,14 @@ def test_empty_windows_follow_the_slim_and_full_rules() -> None:
         run_pipeline(_request(full_log=True, bars={timeframe: () for timeframe in Timeframe}), services)
     bars = _bars()
     bars[Timeframe.H1] = ()
-    with pytest.raises(ValueError, match="higher timeframe window is empty"):
-        run_pipeline(_request(full_log=True, bars=bars), services)
+    engine.calls.clear()
+    short = run_pipeline(_request(full_log=True, bars=bars), services)
+    assert [call[1] for call in engine.calls] == [Timeframe.M15]
+    assert short.action is DecisionAction.HOLD
+    codes = [item.code for item in short.rules.vetoes]  # type: ignore[union-attr]
+    assert codes == [VetoCode.INSUFFICIENT_HISTORY]
+    assert short.decision.snapshot_id_h1 is None
+    assert short.plan is None and short.order is None
 
 
 def test_flattened_skips_the_engine_and_plan_entry() -> None:

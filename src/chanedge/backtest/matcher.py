@@ -2,7 +2,8 @@
 
 Step 1 fills leftover next-open orders at this bar's open. A reduce that
 flattens the position is the only fill. Step 2 runs only while the position
-is still open, and a stop fills before TP1.
+is still open, and a stop fills before TP1. TP1 fills once per position; the
+caller passes tp1_filled from its book so a restart does not reduce again.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ def match_bar(
     fee_bps: Decimal,
     slippage_bps: Decimal,
     arm_close: float | None,
+    tp1_filled: bool = False,
 ) -> tuple[MatchFill, ...]:
     """Return fills for one symbol. Inputs are not mutated."""
     state = _from_position(position)
@@ -71,6 +73,8 @@ def match_bar(
             partial_reason=None,
         )
         fills.append(fill)
+        if not order.reduce_only:
+            tp1_filled = False
         state = _apply(state, order, fill)
         if order.reduce_only and state.qty == _ZERO:
             return tuple(fills)
@@ -79,6 +83,8 @@ def match_bar(
     stop_fill = _stop(state, bar, fee_bps=fee_bps, slippage_bps=slippage_bps, arm_close=arm_close)
     if stop_fill is not None:
         fills.append(stop_fill)
+        return tuple(fills)
+    if tp1_filled:
         return tuple(fills)
     target_fill = _target(state, bar, fee_bps=fee_bps, slippage_bps=slippage_bps)
     if target_fill is not None:

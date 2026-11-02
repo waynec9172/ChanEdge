@@ -7,6 +7,7 @@ import app, marketdata, or journal, and it does not call the exchange port.
 from __future__ import annotations
 
 import time
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -80,7 +81,7 @@ def run_backtest(
     del initial_equity  # the broker already replayed or seeded cash
     limits = dict(_DEFAULT_WINDOWS if windows is None else windows)
     store = {
-        timeframe: {symbol: tuple(bar_source.load(symbol, timeframe)) for symbol in symbols}
+        timeframe: {symbol: _Series(bar_source.load(symbol, timeframe)) for symbol in symbols}
         for timeframe in Timeframe
     }
     times = _decision_times(store[Timeframe.M15], history_start, history_end, refresh_minute)
@@ -120,7 +121,7 @@ def run_backtest(
         flattened: set[str] = set()
         match_names = set(broker.open_symbols()) | set(broker.pending_symbols()) | shadow.active_symbols()
         for symbol in sorted(match_names):
-            bar = _bar_at(store[Timeframe.M15].get(symbol, ()), decision_time)
+            bar = store[Timeframe.M15].get(symbol, _EMPTY).at(decision_time)
             if bar is None:
                 continue
             was_open = broker.position(symbol) is not None
@@ -131,6 +132,7 @@ def run_backtest(
                 fee_bps=fee_bps,
                 slippage_bps=slippage_bps,
                 arm_close=broker.arm_close(symbol),
+                tp1_filled=broker.tp1_filled(symbol),
             )
             if matched:
                 broker.apply(matched)
@@ -142,12 +144,17 @@ def run_backtest(
         jobs = _jobs(broker, shadow, board, store[Timeframe.M15], decision_time, flattened)
         effective = list(broker.open_positions())
         sequence = 0
+        bar_results = []
         for group, symbol, is_flat in jobs:
             account = _view(broker, effective, marks)
             recorded = group != "shadow"
             position = broker.position(symbol) if group == "exit" else None
             if group == "shadow":
                 position = shadow.position(symbol)
+            request_bars = {
+                timeframe: store[timeframe].get(symbol, _EMPTY).window(decision_time, limits[timeframe])
+                for timeframe in Timeframe
+            }
             request = PipelineRequest(
                 symbol=symbol,
                 decision_time=decision_time,
@@ -156,11 +163,8 @@ def run_backtest(
                 group="exit" if group != "entry" else "entry",
                 full_log=full_log,
                 flattened=is_flat,
-                bars={
-                    timeframe: _window(store[timeframe].get(symbol, ()), decision_time, limits[timeframe])
-                    for timeframe in Timeframe
-                },
-                data_quality=_quality(quality, symbol, decision_time, store[Timeframe.M15].get(symbol, ())),
+                bars=request_bars,
+                data_quality=_quality(quality, symbol, decision_time, request_bars),
                 instrument=instruments[symbol],
                 account=account,
                 safety=safety,
@@ -187,7 +191,7 @@ def run_backtest(
                 if snap is not None:
                     latest[symbol] = snap
             if recorded:
-                results.append(result)
+                bar_results.append(result)
                 if result.amend is not None:
                     broker.amend(
                         symbol,
@@ -200,6 +204,7 @@ def run_backtest(
                     shadow.apply_review(symbol, result.shadow_review, result.bar_close, decision_time)
                 effective = _apply_effective(effective, result)
                 _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_time)
+                results.append(_kept(result))
                 if halted:
                     break
             else:
@@ -215,9 +220,7 @@ def run_backtest(
                 if halted:
                     break
         flush = broker.take_flush()
-        report_sink.commit_bar(
-            _commit(tuple(item.decision for item in results if item.decision.decision_time == decision_time), flush)
-        )
+        report_sink.commit_bar(_commit(tuple(item.decision for item in bar_results), flush))
         for fill in flush.fills:
             fills.append(fill)
             fee_drag += fill.fee_quote
@@ -290,6 +293,20 @@ def _commit(decisions, flush):
     )
 
 
+def _kept(result):
+    """What the report and the caller read later. Snapshots and contexts are dropped per bar."""
+    return result.model_copy(
+        update={
+            "candidate": None,
+            "features": None,
+            "context": None,
+            "order": None,
+            "snapshots": {},
+            "shadow_review": None,
+        }
+    )
+
+
 def _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_time) -> None:
     if result.group == "entry" and result.features is not None:
         overlaps.append(result.features.structure.consecutive_bi_overlap_ratio)
@@ -324,7 +341,7 @@ def _remember(meta, overlaps, signals, shadow, shadow_sizer, result, decision_ti
 
 def _jobs(broker, shadow, board, bars, decision_time, flattened: set[str]):
     def has_bar(symbol: str) -> bool:
-        return _bar_at(bars.get(symbol, ()), decision_time) is not None
+        return bars.get(symbol, _EMPTY).at(decision_time) is not None
 
     open_names = [symbol for symbol in broker.open_symbols() if has_bar(symbol)]
     dropped = sorted(symbol for symbol in open_names if symbol not in board)
@@ -413,8 +430,8 @@ def _seeds(broker) -> dict[str, dict]:
     return seeds
 
 
-def _quality(callback, symbol: str, decision_time: datetime, bars) -> DataQuality:
-    window = _window(bars, decision_time, len(bars) or 1)
+def _quality(callback, symbol: str, decision_time: datetime, windows) -> DataQuality:
+    """The callback sees the three decision windows. Stale is cleared afterwards."""
     if callback is None:
         quality = DataQuality(
             stale=False,
@@ -424,7 +441,7 @@ def _quality(callback, symbol: str, decision_time: datetime, bars) -> DataQualit
             reasons=(),
         )
     else:
-        quality = callback(symbol, decision_time, window)
+        quality = callback(symbol, decision_time, windows)
     if quality.stale:
         return quality.model_copy(update={"stale": False})
     return quality
@@ -448,10 +465,8 @@ def _preload(source, times, refresh_minute: int) -> dict[date, dict[str, int]]:
 
 def _decision_times(bars_by_symbol, history_start: date, history_end: date, refresh_minute: int):
     found: set[datetime] = set()
-    for bars in bars_by_symbol.values():
-        for bar in bars:
-            if not bar.is_closed:
-                continue
+    for series in bars_by_symbol.values():
+        for bar in series.bars:
             day = _universe_date(bar.close_time, refresh_minute)
             if history_start <= day <= history_end:
                 found.add(bar.close_time)
@@ -460,25 +475,33 @@ def _decision_times(bars_by_symbol, history_start: date, history_end: date, refr
 
 def _marks(bars_by_symbol, decision_time: datetime) -> dict[str, float]:
     marks = {}
-    for symbol, bars in bars_by_symbol.items():
-        bar = _bar_at(bars, decision_time)
+    for symbol, series in bars_by_symbol.items():
+        bar = series.at(decision_time)
         if bar is not None:
             marks[symbol] = bar.close
     return marks
 
 
-def _window(bars, decision_time: datetime, limit: int):
-    closed = [bar for bar in bars if bar.is_closed and bar.close_time <= decision_time]
-    if limit < 1:
-        return tuple(closed)
-    return tuple(closed[-limit:])
+class _Series:
+    """Closed bars in close_time order. Lookups bisect instead of scanning history."""
+
+    def __init__(self, bars) -> None:
+        self.bars = tuple(sorted((bar for bar in bars if bar.is_closed), key=lambda bar: bar.close_time))
+        self._closes = [bar.close_time for bar in self.bars]
+
+    def window(self, decision_time: datetime, limit: int):
+        end = bisect_right(self._closes, decision_time)
+        start = 0 if limit < 1 else max(0, end - limit)
+        return self.bars[start:end]
+
+    def at(self, decision_time: datetime):
+        index = bisect_left(self._closes, decision_time)
+        if index < len(self._closes) and self._closes[index] == decision_time:
+            return self.bars[index]
+        return None
 
 
-def _bar_at(bars, decision_time: datetime):
-    for bar in bars:
-        if bar.is_closed and bar.close_time == decision_time:
-            return bar
-    return None
+_EMPTY = _Series(())
 
 
 def _universe_date(moment: datetime, refresh_minute: int) -> date:

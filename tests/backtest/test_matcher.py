@@ -127,6 +127,24 @@ def test_stop_beats_tp1_when_both_are_touched() -> None:
     assert fills[0].client_order_id.endswith(":stop")
 
 
+def test_tp1_fills_once_per_position() -> None:
+    target = PartialTarget(fraction=0.5, price=101.0, reason=PartialReason.R_MULTIPLE)
+    held = _position(_plan(stop=99.0, qty=Decimal("8"), targets=(target,)), stop_price=99.0)
+    candle = _bar(T15, open_=100.0, high=102.0, low=99.5, close=100.0)
+    first = match_bar(held, (), candle, fee_bps=ZERO, slippage_bps=ZERO, arm_close=None)
+    assert [fill.qty for fill in first] == [Decimal("4")]
+    assert first[0].client_order_id.endswith(":tp1")
+    reduced = held.model_copy(update={"qty": Decimal("4")})
+    later = _bar(T15 + timedelta(minutes=15), open_=100.0, high=102.0, low=99.5, close=100.0)
+    again = match_bar(reduced, (), later, fee_bps=ZERO, slippage_bps=ZERO, arm_close=None, tp1_filled=True)
+    assert again == ()
+    # The stop still fills after TP1.
+    stopped = _bar(T15 + timedelta(minutes=30), open_=100.0, high=102.0, low=98.0, close=100.0)
+    exits = match_bar(reduced, (), stopped, fee_bps=ZERO, slippage_bps=ZERO, arm_close=None, tp1_filled=True)
+    assert [fill.qty for fill in exits] == [Decimal("4")]
+    assert exits[0].client_order_id.endswith(":stop")
+
+
 def _plan(
     *,
     entry: float = 100.0,

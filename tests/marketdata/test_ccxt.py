@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+import ccxt
+import pytest
+
+from chanedge.app.compose import instruments_from_exchange
 from chanedge.domain.bars import Instrument
 from chanedge.domain.enums import InstrumentSource, ProductType, Timeframe
 from chanedge.marketdata.ccxt_adapter import (
@@ -236,3 +240,111 @@ def test_exchange_instrument_and_paper_pool_drop_bad_contracts() -> None:
     assert "USDC/USDT" not in symbols
     assert "INV/USDT" not in symbols
     assert len(symbols) == 20
+
+
+class RawKlineExchange(FakeExchange):
+    """Binance raw klines: strings, quote asset volume at index 7, trades at index 8."""
+
+    def __init__(self, raw) -> None:
+        super().__init__([])
+        self.raw = raw
+        self.raw_calls: list[dict] = []
+
+    def fapiPublicGetKlines(self, params):
+        self.raw_calls.append(params)
+        return self.raw
+
+
+def test_daily_quote_volume_comes_from_the_raw_klines() -> None:
+    open_time = datetime(2023, 12, 31, tzinfo=UTC)
+    close_ms = _ms(open_time + timedelta(days=1)) - 1
+    row = [_ms(open_time), "1.0", "1.0", "1.0", "1.0", "9.0", close_ms, "12345.5", 77, "4", "5", "0"]
+    exchange = RawKlineExchange([row])
+    port = PaperMarketData(exchange, clock=CLOCK)
+    quotes = port.fetch_daily_klines("BTC/USDT:USDT", open_time, open_time + timedelta(days=1))
+    assert [quote.quote_volume for quote in quotes] == [Decimal("12345.5")]
+    assert exchange.raw_calls[0]["symbol"] == "BTCUSDT"
+    assert exchange.raw_calls[0]["interval"] == "1d"
+    assert exchange.calls == []
+    assert exchange.tickers == 0
+
+
+def test_unknown_leverage_max_takes_the_fallback() -> None:
+    # ccxt 4.5's Binance parser returns limits.leverage.max as None.
+    market = {
+        "symbol": "BTC/USDT:USDT",
+        "base": "BTC",
+        "quote": "USDT",
+        "settle": "USDT",
+        "swap": True,
+        "linear": True,
+        "contractSize": 1,
+        "precision": {"price": 0.1, "amount": 0.001},
+        "limits": {"amount": {"min": 0.001}, "cost": {"min": 5}, "leverage": {"min": None, "max": None}},
+    }
+    assert instrument_from_market(market, leverage_fallback=2).leverage_max == 2
+    with pytest.raises(ValueError, match="leverage max is required"):
+        instrument_from_market(market)
+    listed = dict(market)
+    listed["limits"] = {"amount": {"min": 0.001}, "leverage": {"max": 125.0}}
+    assert instrument_from_market(listed, leverage_fallback=2).leverage_max == 125
+
+
+def _binance(symbol: str, base: str, quote: str, contract: str, delivery: int) -> dict:
+    """One exchangeInfo row, parsed offline by the installed ccxt."""
+    return {
+        "symbol": symbol,
+        "pair": base + quote,
+        "contractType": contract,
+        "deliveryDate": delivery,
+        "onboardDate": 1569398400000,
+        "status": "TRADING",
+        "baseAsset": base,
+        "quoteAsset": quote,
+        "marginAsset": quote,
+        "pricePrecision": 2,
+        "quantityPrecision": 3,
+        "baseAssetPrecision": 8,
+        "quotePrecision": 8,
+        "underlyingType": "COIN",
+        "filters": [
+            {"filterType": "PRICE_FILTER", "minPrice": "1", "maxPrice": "1000000", "tickSize": "0.10"},
+            {"filterType": "LOT_SIZE", "minQty": "0.001", "maxQty": "1000", "stepSize": "0.001"},
+            {"filterType": "MIN_NOTIONAL", "notional": "100"},
+        ],
+        "orderTypes": ["LIMIT", "MARKET"],
+        "timeInForce": ["GTC"],
+    }
+
+
+class MarketsExchange:
+    def __init__(self, markets: list[dict]) -> None:
+        self.markets = markets
+
+    def load_markets(self):
+        return {market["symbol"]: market for market in self.markets}
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_usdc_perp_and_dated_future_do_not_replace_the_usdt_perp(reverse: bool) -> None:
+    parser = ccxt.binanceusdm()
+    parsed = [
+        parser.parse_market(_binance("BTCUSDT", "BTC", "USDT", "PERPETUAL", 4133404800000)),
+        parser.parse_market(_binance("BTCUSDC", "BTC", "USDC", "PERPETUAL", 4133404800000)),
+        parser.parse_market(_binance("BTCUSDT_261225", "BTC", "USDT", "CURRENT_QUARTER", 1798185600000)),
+    ]
+    assert [market["symbol"] for market in parsed] == [
+        "BTC/USDT:USDT",
+        "BTC/USDC:USDC",
+        "BTC/USDT:USDT-261225",
+    ]
+    if reverse:
+        parsed.reverse()
+    found = instruments_from_exchange(MarketsExchange(parsed), "binanceusdm", leverage_fallback=2)
+    assert list(found) == ["BTC/USDT"]
+    assert found["BTC/USDT"].venue_symbol == "BTC/USDT:USDT"
+    for market in parsed:
+        if market["symbol"] == "BTC/USDT:USDT":
+            continue
+        with pytest.raises(ValueError, match="USDT-settled linear perpetual"):
+            instrument_from_market(market, leverage_fallback=2)

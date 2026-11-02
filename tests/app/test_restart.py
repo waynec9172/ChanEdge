@@ -15,10 +15,13 @@ from chanedge.config.load import load_settings
 from chanedge.config.model import PinSymbol
 from chanedge.domain.bars import Bar, Instrument, timeframe_duration
 from chanedge.domain.chanlun import ChanSignal, ChanSnapshot
+from chanedge.domain.decision import OrderIntent
 from chanedge.domain.enums import (
     DecisionAction,
     Direction,
     InstrumentSource,
+    OrderSide,
+    PartialReason,
     ProductType,
     RuntimeMode,
     Side,
@@ -28,7 +31,14 @@ from chanedge.domain.enums import (
     Timeframe,
     TrailKind,
 )
-from chanedge.domain.risk import InvalidationSpec, PositionState, RiskPlan, SafetyState, TrailRule
+from chanedge.domain.risk import (
+    InvalidationSpec,
+    PartialTarget,
+    PositionState,
+    RiskPlan,
+    SafetyState,
+    TrailRule,
+)
 from chanedge.execution.paper import PaperBroker
 from chanedge.features.builder import FeatureBuilder
 from chanedge.jev.model import JevModel
@@ -40,9 +50,11 @@ ROOT = Path(__file__).resolve().parents[2]
 UTC = timezone.utc
 T0 = datetime(2024, 1, 1, tzinfo=UTC)
 T15 = datetime(2024, 1, 1, 0, 15, tzinfo=UTC)
+T30 = datetime(2024, 1, 1, 0, 30, tzinfo=UTC)
 H1_OPEN = datetime(2023, 12, 31, 23, tzinfo=UTC)
 H4_OPEN = datetime(2023, 12, 31, 20, tzinfo=UTC)
 SYMBOL = "BTC/USDT"
+OTHER = "ETH/USDT"
 
 
 class _Boom:
@@ -118,9 +130,9 @@ class SpyRisk:
         return self.inner.review_open(context, position)
 
 
-def _pin_settings():
+def _pin_settings(symbols: tuple[str, ...] = (SYMBOL,)):
     base = load_settings(ROOT / "config" / "default.yaml")
-    pin = [PinSymbol(symbol=SYMBOL, venue_symbol=f"{SYMBOL}:USDT")]
+    pin = [PinSymbol(symbol=symbol, venue_symbol=f"{symbol}:USDT") for symbol in symbols]
     return base.model_copy(
         update={
             "universe": base.universe.model_copy(update={"mode": "pin", "pin": pin}),
@@ -129,9 +141,9 @@ def _pin_settings():
     )
 
 
-def _app(tmp_path: Path):
+def _app(tmp_path: Path, symbols: tuple[str, ...] = (SYMBOL,)):
     app = compose(
-        _pin_settings(),
+        _pin_settings(symbols),
         root=tmp_path,
         exchange=_Exchange(),
         clock=_Clock(T15),
@@ -182,14 +194,21 @@ def _restart(app) -> PaperBroker:
     return broker
 
 
-def _candle(timeframe: Timeframe, open_time: datetime, *, low: float = 99.0) -> Bar:
+def _candle(
+    timeframe: Timeframe,
+    open_time: datetime,
+    *,
+    low: float = 99.0,
+    high: float = 101.0,
+    symbol: str = SYMBOL,
+) -> Bar:
     return Bar(
-        symbol=SYMBOL,
+        symbol=symbol,
         timeframe=timeframe,
         open_time=open_time,
         close_time=open_time + timeframe_duration(timeframe),
         open=100.0,
-        high=101.0,
+        high=high,
         low=low,
         close=100.0,
         volume=1.0,
@@ -198,17 +217,21 @@ def _candle(timeframe: Timeframe, open_time: datetime, *, low: float = 99.0) -> 
     )
 
 
-def _store(app) -> None:
+def _store(app, symbol: str = SYMBOL) -> None:
     bars = [
-        _candle(Timeframe.H1, H1_OPEN),
-        _candle(Timeframe.H4, H4_OPEN),
-        _candle(Timeframe.M15, T0, low=99.5),
+        _candle(Timeframe.H1, H1_OPEN, symbol=symbol),
+        _candle(Timeframe.H4, H4_OPEN, symbol=symbol),
+        _candle(Timeframe.M15, T0, low=99.5, symbol=symbol),
     ]
-    grouped: dict[Timeframe, list] = {}
+    _write(app, bars)
+
+
+def _write(app, bars) -> None:
+    grouped: dict[tuple[str, Timeframe], list] = {}
     for bar in bars:
-        grouped.setdefault(bar.timeframe, []).append(store_bar(bar))
-    for timeframe, stored in grouped.items():
-        app.store.write_closed("binanceusdm", SYMBOL, timeframe, stored)
+        grouped.setdefault((bar.symbol, bar.timeframe), []).append(store_bar(bar))
+    for (symbol, timeframe), stored in grouped.items():
+        app.store.write_closed("binanceusdm", symbol, timeframe, stored)
 
 
 def _instrument() -> Instrument:
@@ -319,3 +342,110 @@ def test_restart_plan_entry_uses_the_stored_cash(tmp_path: Path) -> None:
     assert result.decisions[0].action == DecisionAction.ENTER_LONG.value
     assert spy.plans == 1
     assert spy.equities == [Decimal("10009.89500000")]
+
+
+def test_pending_entry_survives_a_restart_and_fills(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    spy = SpyRisk(RiskManager(risk_params(app.settings)))
+    _arm(app, ScriptedEngine({(SYMBOL, T15): _signal()}), spy)
+    entered = run_paper_bar(app, decision_time=T15, sleep=lambda _seconds: None)
+    assert entered.decisions[0].action == DecisionAction.ENTER_LONG.value
+    broker = _restart(app)
+    (pending,) = broker.pending_for(SYMBOL)
+    assert pending.plan is not None
+    assert pending.entry_decision_time == T15
+    _write(app, [_candle(Timeframe.M15, T15, low=99.5)])
+    app.clock.now_value = T30
+    _arm(app, ScriptedEngine({}), SpyRisk(RiskManager(risk_params(app.settings))))
+    run_paper_bar(app, decision_time=T30, sleep=lambda _seconds: None)
+    position = broker.position(SYMBOL)
+    assert position is not None
+    assert position.entry_decision_id == pending.decision_id
+    assert broker.pending_for(SYMBOL) == ()
+
+
+def test_tp1_is_not_taken_again_after_a_restart(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    target = PartialTarget(fraction=0.5, price=100.5, reason=PartialReason.R_MULTIPLE)
+    plan = _held().plan.model_copy(update={"qty": Decimal("8"), "partial_targets": (target,)})
+    # The entry fills at the T0 open and TP1 touches on the same bar.
+    app.broker.queue_order(
+        OrderIntent(
+            intent_id="dec-held",
+            decision_id="dec-held",
+            symbol=SYMBOL,
+            side=OrderSide.BUY,
+            order_type="market",
+            qty=Decimal("8"),
+            reduce_only=False,
+            client_order_id="dec-held",
+        ),
+        group_order=0,
+        plan=plan,
+        entry_decision_time=T0,
+    )
+    _arm(app, ScriptedEngine({}), SpyRisk(RiskManager(risk_params(app.settings))))
+    run_paper_bar(app, decision_time=T15, sleep=lambda _seconds: None)
+    assert app.broker.position(SYMBOL).qty == Decimal("4")
+    broker = _restart(app)
+    assert broker.tp1_filled(SYMBOL) is True
+    _write(app, [_candle(Timeframe.M15, T15, low=99.5)])
+    app.clock.now_value = T30
+    _arm(app, ScriptedEngine({}), SpyRisk(RiskManager(risk_params(app.settings))))
+    run_paper_bar(app, decision_time=T30, sleep=lambda _seconds: None)
+    assert broker.position(SYMBOL).qty == Decimal("4")
+    tp1 = [fill for fill in app.ledger.load_joined_fills() if fill.client_order_id.endswith(":tp1")]
+    assert len(tp1) == 1
+
+
+def test_a_stale_symbol_does_not_hold_back_other_stops(tmp_path: Path) -> None:
+    app = _app(tmp_path, (SYMBOL, OTHER))
+    app.broker.seed(_held().model_copy(update={"stop_price": 99.7}))
+    app.ledger.commit(app.broker.take_flush())
+    _arm(app, ScriptedEngine({}), SpyRisk(RiskManager(risk_params(app.settings))))
+    waited: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waited.append(seconds)
+        app.clock.now_value += timedelta(seconds=seconds)
+
+    result = run_paper_bar(app, decision_time=T15, sleep=sleep)
+    marketdata = app.settings.marketdata
+    assert result.stale is True
+    assert sum(waited) <= marketdata.stale_grace_seconds + 2 * marketdata.close_wait_seconds
+    assert app.broker.position(SYMBOL) is None
+    stops = [fill for fill in app.ledger.load_joined_fills() if fill.client_order_id.endswith(":stop")]
+    assert len(stops) == 1
+    by_symbol = {decision.symbol: decision for decision in result.decisions}
+    assert "stale_data" in (by_symbol[OTHER].hard_rule_json or "")
+    assert "stale_data" not in (by_symbol[SYMBOL].hard_rule_json or "")
+
+
+def test_a_pending_entry_off_the_board_still_fills(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    _store(app, OTHER)
+    plan = _held().plan.model_copy(update={"symbol": OTHER})
+    ack = app.broker.queue_order(
+        OrderIntent(
+            intent_id="dec-other",
+            decision_id="dec-other",
+            symbol=OTHER,
+            side=OrderSide.BUY,
+            order_type="market",
+            qty=Decimal("1"),
+            reduce_only=False,
+            client_order_id="dec-other",
+        ),
+        group_order=0,
+        plan=plan,
+        entry_decision_time=T0,
+    )
+    assert ack.accepted is True
+    _arm(app, ScriptedEngine({}), SpyRisk(RiskManager(risk_params(app.settings))))
+    result = run_paper_bar(app, decision_time=T15, sleep=lambda _seconds: None)
+    position = app.broker.position(OTHER)
+    assert position is not None
+    assert position.entry_decision_id == "dec-other"
+    exits = [decision for decision in result.decisions if decision.symbol == OTHER]
+    assert len(exits) == 1
+    assert exits[0].rank is None
