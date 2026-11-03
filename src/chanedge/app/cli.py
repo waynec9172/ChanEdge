@@ -30,7 +30,9 @@ from chanedge.app.paper_loop import (
 )
 from chanedge.app.paper_loop import _kline_text, _symbols_in_files, _windows
 from chanedge.backtest.loop import run_backtest
+from chanedge.backtest.preflight import bar_shortfalls
 from chanedge.config.load import load_settings
+from chanedge.domain.enums import Timeframe
 from chanedge.domain.risk import AccountView
 from chanedge.execution.paper import InMemoryLedger, PaperBroker
 from chanedge.typesafe.cache import cache_digest
@@ -101,6 +103,8 @@ def main(argv: list[str] | None = None, *, environ=None, exchange=None, clock=No
             outcome = run_backtest_command(app, vision_root=vision, end=end)
             if outcome.incomplete:
                 return 3
+            if len(outcome.decisions) == 0:
+                return 1
         elif args.command == "jev-warm":
             code = run_jev_warm(app, vision_root=vision, end=end)
             if code:
@@ -151,6 +155,27 @@ def run_backtest_command(app, *, vision_root: Path, end: date):
     settings = app.settings
     history = date.fromisoformat(settings.marketdata.history_start)
     symbols = tuple(_symbols_in_files(app.root, settings.runtime.venue, history, end))
+    windows = _windows(settings)
+    bars = _PrefetchedBars(ParquetBars(app.store, settings.runtime.venue))
+    parquet_root = Path(app.root) / "data" / "bars" / settings.runtime.venue
+    missing = bar_shortfalls(bars.peek, symbols, history_start=history, windows=windows)
+    if len(missing) == len(symbols):
+        raise ValueError(
+            f"no symbol has enough closed bars at history_start {history.isoformat()} 00:00Z "
+            f"in parquet_root {parquet_root} for timeframes 15m, 1h, 4h "
+            f"(windows 15m={settings.marketdata.windows['15m']}, 1h={settings.marketdata.windows['1h']}, "
+            f"4h={settings.marketdata.windows['4h']}; symbols checked: {len(symbols)}); "
+            "run chanedge download first"
+        )
+    if missing:
+        print(
+            f"warning: {len(missing)} of {len(symbols)} symbols lack closed bars at history_start "
+            f"{history} in parquet_root {parquet_root}:",
+            file=sys.stderr,
+        )
+        for symbol, lacking in missing.items():
+            detail = ", ".join(f"{tf.value} {have}/{need}" for tf, (have, need) in lacking.items())
+            print(f"  {symbol}: {detail}", file=sys.stderr)
     instruments = {}
     for symbol in symbols:
         text = _kline_text(vision_root, symbol)
@@ -170,7 +195,7 @@ def run_backtest_command(app, *, vision_root: Path, end: date):
         services=_services_for_broker(app, broker),
         broker=broker,
         clock=app.clock,
-        bar_source=ParquetBars(app.store, settings.runtime.venue),
+        bar_source=bars,
         universe_source=FileUniverse(app.root, settings.runtime.venue),
         report_sink=report,
         instruments=instruments,
@@ -193,14 +218,46 @@ def run_backtest_command(app, *, vision_root: Path, end: date):
         jev_weights=weights,
         funding_source=VisionFunding(vision_root),
         quality=backtest_quality(settings),
-        windows=_windows(settings),
+        windows=windows,
         full_log=False,
         halt_on=halt,
     )
     if settings.systemone.enabled:
         _write_systemone(result, app.systemone_reader)
     reconcile_report(app.ledger.repo.path, result.directory, result.decisions)
+    if not result.incomplete and len(result.decisions) == 0:
+        _mark_incomplete(result.directory, "no_decisions")
+        print(
+            f"backtest incomplete: no_decisions (decision_count 0); report {result.directory}",
+            file=sys.stderr,
+        )
     return result
+
+
+class _PrefetchedBars:
+    """The preflight reads each (symbol, timeframe) once; run_backtest takes that same tuple."""
+
+    def __init__(self, source) -> None:
+        self._source = source
+        self._cache: dict[tuple[str, Timeframe], tuple] = {}
+
+    def peek(self, symbol, timeframe):
+        key = (symbol, timeframe)
+        if key not in self._cache:
+            self._cache[key] = self._source.load(symbol, timeframe)
+        return self._cache[key]
+
+    def load(self, symbol, timeframe):
+        cached = self._cache.pop((symbol, timeframe), None)
+        return cached if cached is not None else self._source.load(symbol, timeframe)
+
+
+def _mark_incomplete(directory: Path, reason: str) -> None:
+    path = directory / "run.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["incomplete"] = True
+    payload["incomplete_reason"] = reason
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _cache_miss_halt(result) -> bool:
