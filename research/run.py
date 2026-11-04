@@ -92,6 +92,8 @@ def _exit_label(cfg: SimConfig, raw_exit: dict) -> str:
             parts.append(f"atr{v['mult']}")
         elif k == "opposite_signal":
             parts.append("opp")
+        elif k == "donchian_exit":
+            parts.append(f"dcx{v['n']}")
         else:
             parts.append(k)
     return "+".join(parts) or "none"
@@ -122,6 +124,12 @@ def summarize(cfg: SimConfig, raw_exit: dict) -> str:
         filt.append(f"ms>={f['min_stop_pct'] * 100:g}%")
     if f.get("exclude_tradfi"):
         filt.append("xtf")
+    if f.get("dc_bias_4h"):
+        filt.append("bias4h")
+    if f.get("dc_not_in_zs4h"):
+        filt.append("nozs4h")
+    if f.get("delist_rule"):
+        filt.append("delist")
     e = cfg.entry
     if e["mode"] == "market_next_open":
         mode = "market"
@@ -146,6 +154,8 @@ def compute(cfg: SimConfig, workers: int):
     market = sim.load_market(bi_tf=cfg.signals["tf"] if cfg.signals["source"] == "chan" else "15m")
     signals = sim.select_signals(cfg, market)
     trades, attempts, counters = sim.simulate(cfg, market, signals, workers=workers, return_attempts=True)
+    if cfg.filters["delist_rule"]:
+        counters["delist_filtered"] = int(signals.attrs.get("delist_filtered", 0))
     return signals, trades, attempts, counters
 
 

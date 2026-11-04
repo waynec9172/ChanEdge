@@ -220,10 +220,19 @@ def _http_get(url: str) -> bytes | None:
     raise ConnectionError(repr(last))
 
 
+def vision_url(kind: str, sym: str, period: str) -> str:
+    """Download URL of one funding zip; the path segments are percent-encoded (non-ASCII symbols such as 币安人生USDT)."""
+    from urllib.parse import quote
+
+    return f"{VISION}/{kind}/fundingRate/{quote(sym, safe='')}/{quote(f'{sym}-fundingRate-{period}', safe='')}.zip"
+
+
 def _fetch_one(kind: str, sym: str, period: str, lo_us: int, hi_us: int):
-    """Download + validate one monthly/daily file into vision_dl. Returns (ok, reason)."""
+    """Download + validate one monthly/daily file into vision_dl. Returns (ok, reason); reason 'cached' = file already on disk."""
     name = f"{sym}-fundingRate-{period}"
-    base = f"{VISION}/{kind}/fundingRate/{sym}/{name}.zip"
+    if (DL_DIR / kind / sym / f"{name}.csv").exists():
+        return True, "cached"
+    base = vision_url(kind, sym, period)
     try:
         z = _http_get(base)
         if z is None:
@@ -264,7 +273,7 @@ def fetch_funding() -> int:
     logs = C.CACHE / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     DL_DIR.mkdir(parents=True, exist_ok=True)
-    counts = {"local": 0, "dl_monthly": 0, "dl_daily": 0, "missing": 0}
+    counts = {"local": 0, "dl_monthly": 0, "dl_daily": 0, "missing": 0, "cached": 0}
     targets = []
     with open(logs / "funding_fetch.log", "a") as log:
         log.write("# fetch-funding start\n")
@@ -295,11 +304,12 @@ def fetch_funding() -> int:
             lo, hi = month_start_us(mo), month_start_us(shift_month(mo, 1))
             ok, why = _fetch_one("monthly", fs, mo, lo, hi)
             if ok:
-                return t, "dl_monthly", ""
+                return t, "dl_monthly", why
             if not daily_ok:
                 return t, "missing", f"monthly {why}"
             last_day = min(last_open.day, 31)
             got = 0
+            n_cached = 0
             for dday in range(1, last_day + 1):
                 day = f"{mo}-{dday:02d}"
                 dlo = int(pd.Timestamp(day, tz="UTC").value // 1000)
@@ -307,14 +317,16 @@ def fetch_funding() -> int:
                 if not ok:
                     return t, "missing", f"monthly {why}; daily {day} {why2}; got {got}/{last_day} days"
                 got += 1
-            return t, "dl_daily", f"{got} days"
+                n_cached += why2 == "cached"
+            return t, "dl_daily", f"{got} days" + (" cached" if n_cached == got else "")
 
         with ThreadPoolExecutor(max_workers=4) as ex:
             for t, src, why in ex.map(work, targets):
                 counts[src] += 1
+                counts["cached"] += why.endswith("cached")
                 log.write(f"{t[1]} {t[2]} {src} {why}\n")
                 log.flush()
-        log.write(f"# done dl_monthly={counts['dl_monthly']} dl_daily={counts['dl_daily']} missing={counts['missing']}\n")
+        log.write(f"# done dl_monthly={counts['dl_monthly']} dl_daily={counts['dl_daily']} missing={counts['missing']} cached={counts['cached']}\n")
     print(f"fetch-funding: {counts}")
     return 0
 
@@ -460,6 +472,161 @@ def build_funding(log) -> list[str]:
     return failed
 
 
+DELIST_MIN_BARS = 96
+DELIST_COLS = ["symbol", "run_start", "run_end", "n_bars", "delist_bar", "delist_close", "to_end", "has_gap"]
+
+
+def flat_runs(df: pd.DataFrame, min_bars: int = DELIST_MIN_BARS) -> list[dict]:
+    """Flat-line runs of one symbol's closed 15m bars (sorted by open_time): high == low == close and volume == 0, >= min_bars
+    consecutive rows (row order; time gaps inside a run do not split it). delist_bar = open_time of the row before the run."""
+    if df.empty:
+        return []
+    h, lo, c, v = (df[x].to_numpy(float) for x in ("high", "low", "close", "volume"))
+    flat = (h == lo) & (lo == c) & (v == 0)
+    ot = df["open_time"].reset_index(drop=True)
+    n = len(df)
+    edges = np.flatnonzero(np.diff(np.r_[0, flat.astype(np.int8), 0]))
+    out = []
+    for a, b in zip(edges[0::2], edges[1::2]):  # run = rows a .. b-1
+        if b - a < min_bars:
+            continue
+        gaps = ot.iloc[a:b].diff().dropna()
+        out.append(
+            {
+                "run_start": ot.iloc[a],
+                "run_end": ot.iloc[b - 1],
+                "n_bars": int(b - a),
+                "delist_bar": ot.iloc[a - 1] if a > 0 else pd.NaT,
+                "delist_close": float(c[a - 1]) if a > 0 else float("nan"),
+                "to_end": bool(b == n),
+                "has_gap": bool((gaps != pd.Timedelta(minutes=15)).any()),
+            }
+        )
+    return out
+
+
+def build_delist(log) -> list[str]:
+    rows = []
+    for s in C.union_symbols():
+        df = C.load_bars_df(s, "15m")
+        for r in flat_runs(df):
+            rows.append({"symbol": s, **r})
+    d = pd.DataFrame(rows, columns=DELIST_COLS)
+    for c in ("run_start", "run_end", "delist_bar"):
+        d[c] = pd.to_datetime(d[c], utc=True).astype("datetime64[us, UTC]")
+    d = d.sort_values(["symbol", "run_start"], kind="stable").reset_index(drop=True)
+    d.to_parquet(C.CACHE / "delist.parquet")
+    cut = pd.Timestamp("2025-07-01", tz="UTC")
+    log.write(
+        f"# delist runs={len(d)} symbols={d['symbol'].nunique()} to_end={int(d['to_end'].sum())} relist={int((~d['to_end']).sum())} "
+        f"to_end_start_before_2025-07-01={int((d['to_end'] & (d['run_start'] < cut)).sum())} no_delist_bar={int(d['delist_bar'].isna().sum())} "
+        f"with_gap={int(d['has_gap'].sum())}\n"
+    )
+    return []
+
+
+DCAUG_COLS = ["symbol", "type", "time", "bias4_snap", "zs4_zg", "zs4_zd", "zs4_count"]
+
+
+def _dcaug_job(args):
+    symbol, t_us = args
+    try:
+        from bisect import bisect_right
+
+        from research import signals
+
+        t0 = time.time()
+        eng = signals.make_engine()
+        bars = signals.closed_bars("4h", symbol)
+        closes_us = np.array([int(pd.Timestamp(b.close_time).value // 1000) for b in bars], dtype="int64")
+        limit = C.WINDOWS["4h"]
+        ends = np.searchsorted(closes_us, t_us, side="right")  # bars with close_time <= T
+        cache: dict = {}
+        bias = np.full(len(t_us), None, dtype=object)
+        zg = np.full(len(t_us), np.nan)
+        zd = np.full(len(t_us), np.nan)
+        cnt = np.full(len(t_us), np.nan)
+        for k, end in enumerate(ends.tolist()):
+            if end == 0:
+                continue
+            if end not in cache:
+                snap = signals.snapshot(eng, bars[max(0, end - limit) : end], "4h")
+                zs = snap.zhongshus
+                cache[end] = (snap.structure_bias.value, (zs[-1].zg, zs[-1].zd) if zs else (np.nan, np.nan), len(zs))
+            b, (g, d), n = cache[end]
+            bias[k], zg[k], zd[k], cnt[k] = b, g, d, n
+        return {"symbol": symbol, "bias": bias, "zg": zg, "zd": zd, "cnt": cnt, "elapsed": time.time() - t0, "snaps": len(cache)}
+    except Exception as exc:
+        import traceback
+
+        return {"symbol": symbol, "error": f"{exc!r}\n{traceback.format_exc()}"}
+
+
+def build_dcaug(workers: int, log) -> list[str]:
+    """Plan 4.5: per Donchian row (top-20 rows only) the 4h structure_bias and latest zhongshu of the last closed 4h snapshot at T."""
+    from research import signals
+
+    failed: list[str] = []
+    t_all = time.time()
+    tot = {"rows": 0, "mm": 0, "nb": 0, "nz": 0}
+    for tf in ("1h", "4h"):
+        df = pd.read_parquet(C.CACHE / f"signals_donchian_{tf}.parquet", columns=["symbol", "type", "time", "in_top20"])
+        top = df["in_top20"].to_numpy(bool)
+        t_us = time_ns(df["time"]).astype("int64") // 1000
+        bias = np.full(len(df), None, dtype=object)
+        zg = np.full(len(df), np.nan)
+        zd = np.full(len(df), np.nan)
+        cnt = np.full(len(df), np.nan)
+        syms = df["symbol"].to_numpy()
+        idx_by = {}
+        for i in np.flatnonzero(top).tolist():
+            idx_by.setdefault(syms[i], []).append(i)
+        jobs = [(s, t_us[np.array(ix)]) for s, ix in idx_by.items()]
+        order = {s: np.array(ix) for s, ix in idx_by.items()}
+        with Pool(workers, maxtasksperchild=1) as pool:
+            for res in pool.imap_unordered(_dcaug_job, jobs):
+                s = res["symbol"]
+                if "error" in res:
+                    failed.append(s)
+                    log.write(f"FAIL dcaug {tf} {s} {res['error']}\n")
+                    log.flush()
+                    continue
+                ix = order[s]
+                bias[ix], zg[ix], zd[ix], cnt[ix] = res["bias"], res["zg"], res["zd"], res["cnt"]
+                log.write(f"dcaug {tf} {s} rows={len(ix)} snaps={res['snaps']} elapsed={res['elapsed']:.1f}s total={time.time() - t_all:.0f}s\n")
+                log.flush()
+        if failed:
+            return failed
+        out = df[["symbol", "type", "time"]].copy()
+        out["bias4_snap"] = bias
+        out["zs4_zg"] = zg
+        out["zs4_zd"] = zd
+        out["zs4_count"] = cnt
+        # self check against bias_4h.parquet (same algorithm, built in phase 1)
+        b4 = pd.read_parquet(C.CACHE / "bias_4h.parquet")
+        by = {s: g.sort_values("close_time").reset_index(drop=True) for s, g in b4.groupby("symbol", sort=False)}
+        mismatch = no_bias = 0
+        for s, ix in order.items():
+            g = by.get(s)
+            ts = df["time"].iloc[ix]
+            for i, t in zip(ix.tolist(), ts):
+                ref = signals._lookup_bias(g, t.to_pydatetime()) if g is not None else None
+                if ref is None and bias[i] is None:
+                    no_bias += 1
+                elif ref != bias[i]:
+                    mismatch += 1
+        out.to_parquet(C.CACHE / f"signals_donchian_{tf}_aug.parquet")
+        no_zs = int((top & (cnt == 0)).sum())
+        log.write(f"# dcaug-tf {tf} rows={int(top.sum())} bias_mismatch={mismatch} no_bias={no_bias} no_zs={no_zs}\n")
+        tot["rows"] += int(top.sum())
+        tot["mm"] += mismatch
+        tot["nb"] += no_bias
+        tot["nz"] += no_zs
+        log.flush()
+    log.write(f"# dcaug rows={tot['rows']} bias_mismatch={tot['mm']} no_bias={tot['nb']} no_zs={tot['nz']}\n")
+    return failed
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="research.augment")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -481,6 +648,10 @@ def main(argv=None) -> int:
             failed += build_bi_sig(a.workers, log)
         if "funding" in only:
             failed += build_funding(log)
+        if "delist" in only:
+            failed += build_delist(log)
+        if "dcaug" in only:
+            failed += build_dcaug(a.workers, log)
         log.write(f"# done total={time.time() - t0:.0f}s failed={failed}\n")
     if failed:
         print("FAILED:", failed, file=sys.stderr)

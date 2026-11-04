@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from research import common as C
+from research import donchian
 
 BIAS_DOWN = ("down", "breakout_down")
 BIAS_UP = ("up", "breakout_up")
@@ -62,8 +63,12 @@ _FILTER_OPTIONAL = {
     "exclude_tradfi": False,
     "min_stop_atr": None,
     "min_stop_pct": None,
+    # phase 1b
+    "delist_rule": False,
+    "dc_bias_4h": False,
+    "dc_not_in_zs4h": False,
 }
-DONCHIAN_NS = (16, 20, 24, 44, 55, 66)
+DONCHIAN_NS = donchian.NS_ALL
 
 
 class ConfigError(ValueError):
@@ -118,8 +123,8 @@ class SimConfig:
         _check_keys("signals", sig, {"source", "tf", "types", "donchian_n"})
         if sig["source"] not in ("chan", "donchian"):
             raise ConfigError("signals.source must be chan or donchian")
-        if sig["tf"] not in C.TFS:
-            raise ConfigError("signals.tf must be 15m, 1h or 4h")
+        if sig["tf"] not in C.TFS and not (sig["tf"] == "1d" and sig["source"] == "donchian"):
+            raise ConfigError("signals.tf must be 15m, 1h or 4h (1d for donchian only)")
         if not isinstance(sig["types"], list) or not all(isinstance(x, str) for x in sig["types"]):
             raise ConfigError("signals.types must be a list of strings")
         if sig["source"] == "chan":
@@ -130,16 +135,16 @@ class SimConfig:
                 raise ConfigError("signals.donchian_n must be null for chan")
         else:
             if sig["tf"] == "15m":
-                raise ConfigError("donchian signals exist for 1h and 4h only")
-            if sig["donchian_n"] not in DONCHIAN_NS:
-                raise ConfigError(f"signals.donchian_n must be one of {DONCHIAN_NS}")
+                raise ConfigError("donchian signals exist for 1h, 4h and 1d only")
+            if sig["donchian_n"] not in donchian.NS_BY_TF[sig["tf"]]:
+                raise ConfigError(f"signals.donchian_n must be one of {donchian.NS_BY_TF[sig['tf']]}")
             n = sig["donchian_n"]
             if set(sig["types"]) - {f"dc{n}_long", f"dc{n}_short"} or not sig["types"]:
                 raise ConfigError(f"signals.types for donchian must be dc{n}_long / dc{n}_short")
         f = d["filters"]
         _check_keys("filters", f, set(_FILTER_DEFAULTS) | set(_FILTER_OPTIONAL), set(_FILTER_DEFAULTS))
         f = {**_FILTER_OPTIONAL, **f}
-        for k in ("in_top20", "candidate_only", "gate_pass", "exclude_reemit", "htf_4h", "vol_band", "exclude_tradfi"):
+        for k in ("in_top20", "candidate_only", "gate_pass", "exclude_reemit", "htf_4h", "vol_band", "exclude_tradfi", "delist_rule", "dc_bias_4h", "dc_not_in_zs4h"):
             _expect("filters", k, f[k], "bool")
         for k in ("min_stop_atr", "min_stop_pct"):
             _expect("filters", k, f[k], "num?")
@@ -147,6 +152,8 @@ class SimConfig:
                 raise ConfigError(f"filters.{k} must be > 0")
         if sig["source"] != "chan" and (f["htf_4h"] or f["vol_band"]):
             raise ConfigError("htf_4h / vol_band exist for chan signals only")
+        if (f["dc_bias_4h"] or f["dc_not_in_zs4h"]) and (sig["source"] != "donchian" or sig["tf"] not in ("1h", "4h")):
+            raise ConfigError("dc_bias_4h / dc_not_in_zs4h exist for donchian 1h and 4h signals only")
         _expect("filters", "jev_min", f["jev_min"], "num?")
         _expect("filters", "max_cost_r", f["max_cost_r"], "num?")
         if (sig["tf"] != "15m" or sig["source"] != "chan") and (f["candidate_only"] or f["gate_pass"] or f["jev_min"] is not None):
@@ -183,6 +190,13 @@ class SimConfig:
         for k in costs:
             _expect("costs", k, costs[k], "num")
         ex = resolve_exit(d["exit"])
+        if "donchian_exit" in ex:
+            if sig["source"] != "donchian":
+                raise ConfigError("exit.donchian_exit exists for donchian signals only")
+            if ex["donchian_exit"]["n"] not in donchian.NS_BY_TF[sig["tf"]]:
+                raise ConfigError(f"exit.donchian_exit.n must be one of {donchian.NS_BY_TF[sig['tf']]}")
+            if ex["opposite_signal"]["enabled"]:
+                raise ConfigError("exit.donchian_exit cannot be combined with exit.opposite_signal")
         return SimConfig(
             name=d["name"],
             description=d["description"],
@@ -211,10 +225,12 @@ class SimConfig:
 def resolve_exit(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ConfigError("exit must be a mapping")
-    allowed = set(EXIT_MODULES) | {"preset"}
+    allowed = set(EXIT_MODULES) | {"preset", "donchian_exit"}
     extra = set(raw) - allowed
     if extra:
         raise ConfigError(f"unknown key(s) in exit: {sorted(extra)}")
+    raw = dict(raw)
+    dcx = raw.pop("donchian_exit", None)  # phase 1b: kept out of EXIT_MODULES so that old shas do not change
     out = copy.deepcopy(EXIT_MODULES)
     preset = raw.get("preset")
     if preset is not None:
@@ -237,6 +253,14 @@ def resolve_exit(raw: dict) -> dict:
         raise ConfigError("exit.opposite_signal.tf invalid")
     if out["ratchet"]["enabled"] and not out["breakeven"]["enabled"]:
         raise ConfigError("exit.ratchet needs exit.breakeven")
+    if dcx is not None:
+        _check_keys("exit.donchian_exit", dcx, {"enabled", "n"}, {"enabled"})
+        _expect("exit.donchian_exit", "enabled", dcx["enabled"], "bool")
+        if dcx["enabled"]:
+            if "n" not in dcx:
+                raise ConfigError("missing key(s) in exit.donchian_exit: ['n']")
+            _expect("exit.donchian_exit", "n", dcx["n"], "int")
+            out["donchian_exit"] = {"enabled": True, "n": dcx["n"]}
     return out
 
 
@@ -254,6 +278,7 @@ class Market:
     tables: dict = field(default_factory=dict)
     funding: dict | None = None  # symbol -> (funding_time_us array, rate array); None = funding not modelled
     funding_months: dict | None = None  # symbol -> set of "YYYY-MM" that have a funding CSV
+    delist: dict | None = None  # symbol -> (run_start_us[], run_end_us[], delist_us[]) flat-line runs; None = delist.parquet not built
 
 
 def load_funding():
@@ -274,6 +299,20 @@ def load_funding():
         m = m[m["source"] != "imputed"]  # months served by an imputed source count as "affected" (funding_missing)
     months = {sym: set(g["month"]) for sym, g in m.groupby("symbol", sort=False)}
     return out, months
+
+
+def load_delist():
+    """symbol -> (run_start_us, run_end_us, delist_us) arrays (delist_us = -1 when the run starts at the first row), or None."""
+    p = C.CACHE / "delist.parquet"
+    if not p.exists():
+        return None
+    d = pd.read_parquet(p).sort_values(["symbol", "run_start"], kind="stable")
+    out = {}
+    for sym, g in d.groupby("symbol", sort=False):
+        dl = g["delist_bar"]
+        dl_us = np.where(dl.isna(), -1, _us(dl.fillna(g["run_start"]))).astype("int64")
+        out[sym] = (_us(g["run_start"]), _us(g["run_end"]), dl_us)
+    return out
 
 
 def load_market(bi_tf: str = "15m") -> Market:
@@ -305,10 +344,11 @@ def load_market(bi_tf: str = "15m") -> Market:
     inst = pd.read_parquet(cache / "instruments.parquet")
     ticks = {s: (None if pd.isna(t) else float(t)) for s, t in zip(inst["symbol"], inst["price_tick"])}
     fund, fmonths = load_funding()
-    return Market(bars, bias, bi, ticks, funding=fund, funding_months=fmonths)
+    return Market(bars, bias, bi, ticks, funding=fund, funding_months=fmonths, delist=load_delist())
 
 
 AUG_COLS = ("atr15_pct", "tp_up_end", "tp_down_end")
+DC_AUG_COLS = ("bias4_snap", "zs4_zg", "zs4_zd", "zs4_count")
 
 
 def load_signal_table(cfg: SimConfig, tf: str, source: str | None = None, aug: bool = False) -> pd.DataFrame:
@@ -330,6 +370,18 @@ def load_signal_table(cfg: SimConfig, tf: str, source: str | None = None, aug: b
             if not (a[c].to_numpy() == df[c].to_numpy()).all():
                 raise ValueError(f"{ap.name}: column {c} differs from {name}")
         for c in AUG_COLS:
+            df[c] = a[c].to_numpy()
+    if aug and source == "donchian" and (cfg.filters.get("dc_bias_4h") or cfg.filters.get("dc_not_in_zs4h")):
+        ap = C.CACHE / f"signals_donchian_{tf}_aug.parquet"
+        if not ap.exists():
+            raise FileNotFoundError(f"{ap.name} is required by this configuration (run research.augment build --only dcaug)")
+        a = pd.read_parquet(ap)
+        if len(a) != len(df):
+            raise ValueError(f"{ap.name}: {len(a)} rows, expected {len(df)}")
+        for c in ("symbol", "type", "time"):
+            if not (a[c].to_numpy() == df[c].to_numpy()).all():
+                raise ValueError(f"{ap.name}: column {c} differs from {name}")
+        for c in DC_AUG_COLS:
             df[c] = a[c].to_numpy()
     return df
 
@@ -361,19 +413,57 @@ def select_signals(cfg: SimConfig, market: Market | None = None) -> pd.DataFrame
         m &= (a >= v.atr_pct_min) & (a <= v.atr_pct_max)  # NaN compares False -> rejected
     if f["exclude_tradfi"]:
         m &= ~df["symbol"].str.split("/").str[0].isin(C.TRADFI_BASES)
+    if f["dc_bias_4h"]:
+        b4 = df["bias4_snap"]
+        m &= ((df["side"] == 1) & b4.isin(BIAS_UP)) | ((df["side"] == -1) & b4.isin(BIAS_DOWN))
+    if f["dc_not_in_zs4h"]:
+        inside = (df["zs4_count"] > 0) & (df["zs4_zd"] <= df["close"]) & (df["close"] <= df["zs4_zg"])
+        m &= ~inside  # no zhongshu (count 0 / NaN) -> pass
     day = C.universe_dates(df["time"])
     m &= (day >= C.HISTORY_START) & (day <= C.HISTORY_END)
+    n_delist = 0
+    if f["delist_rule"]:
+        if market is None or market.delist is None:
+            raise FileNotFoundError("filters.delist_rule needs research/cache/delist.parquet (run research.augment build --only delist)")
+        n_delist = _delist_filter(df, m, market.delist)
     out = df[m].sort_values(["symbol", "time"], kind="stable").reset_index(drop=True)
     out["attempt_id"] = np.arange(len(out), dtype="int64")
+    out.attrs["delist_filtered"] = int(n_delist)
     return out
+
+
+def _delist_filter(df: pd.DataFrame, m: pd.Series, delist: dict) -> int:
+    """Phase 1b rule (decision 1793825540, option A): drop signals whose time T lies in [run_start, run_end + 15m] of a flat-line run.
+    Modifies the boolean mask m in place and returns how many selected signals were dropped."""
+    mv = m.to_numpy()
+    sel = np.flatnonzero(mv)
+    if not len(sel):
+        return 0
+    syms = df["symbol"].to_numpy()[sel]
+    tus = _us(df["time"].iloc[sel])
+    drop = np.zeros(len(sel), dtype=bool)
+    for s in set(syms.tolist()) & set(delist):
+        rs, re_, _dl = delist[s]
+        ix = np.flatnonzero(syms == s)
+        t = tus[ix]
+        for a, b in zip(rs, re_):
+            drop[ix[(t >= a) & (t <= b + 900_000_000)]] = True
+    mv = mv.copy()
+    mv[sel[drop]] = False
+    m[:] = mv
+    return int(drop.sum())
 
 
 def opposite_times(cfg: SimConfig) -> dict:
     """symbol -> {side: sorted array of signal times (us)} of unfiltered opposite signals."""
     ex = cfg.exit["opposite_signal"]
-    if not ex["enabled"]:
+    dcx = cfg.exit.get("donchian_exit")
+    if dcx is not None:  # reverse n//2 channel breakout (plan E8): unfiltered first breakouts of the same timeframe
+        df = load_signal_table(cfg, cfg.signals["tf"])
+        df = df[df["n"] == dcx["n"]]
+    elif not ex["enabled"]:
         return {}
-    if cfg.signals["source"] == "chan":
+    elif cfg.signals["source"] == "chan":
         df = load_signal_table(cfg, ex["tf"])
     else:
         df = load_signal_table(cfg, cfg.signals["tf"])
@@ -462,7 +552,7 @@ def funding_for_trade(fund, fmonths, symbol, side, R, entry_us, exit_us, legs_ot
     return total / R, cnt, missing, n_imp, n_mkt
 
 
-def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bias, bi, opp: dict, tick, funding=None, attempts_out=None):
+def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bias, bi, opp: dict, tick, funding=None, attempts_out=None, delist=None):
     ex = cfg.exit
     costs = cfg.costs
     taker = costs["taker_bps"] / 1e4
@@ -475,6 +565,12 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
     ms_pct = cfg.filters.get("min_stop_pct")
     mode = cfg.entry["mode"]
     fund, fmonths = funding if funding is not None else (None, None)
+    # phase 1b delist rule: delist = (run_start_us[], run_end_us[], delist_us[]) when filters.delist_rule is on, else None
+    if delist is not None:
+        dl_runs = list(zip(delist[0].tolist(), delist[1].tolist()))
+        dl_points = sorted(x for x in delist[2].tolist() if x >= 0)
+    else:
+        dl_runs, dl_points = [], []
     n_bars = len(mk["ot"])
     ot = mk["ot"].tolist()
     O = mk["o"].tolist()
@@ -511,10 +607,13 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
     rows = []
     cnt = {
         "signals": 0, "no_entry_bar": 0, "invalid_stop": 0, "tick_missing": 0, "cost_rejected": 0,
-        "unfilled": 0, "confirm_abandoned": 0, "minstop_rejected": 0,
+        "unfilled": 0, "confirm_abandoned": 0, "minstop_rejected": 0, "delisted_no_entry": 0,
     }
     tp1C, beC, ratC, fixC, trC = ex["tp1"], ex["breakeven"], ex["ratchet"], ex["fixed_r"], ex["atr_trail"]
     oppC, biasC, lvlC, timeC = ex["opposite_signal"], ex["bias_1h"], ex["level_fail"], ex["time_stop"]
+    chan_exit = "donchian_exit" in ex  # reverse n//2 channel breakout: same mechanics as opposite_signal, own exit_reason
+    use_opp = oppC["enabled"] or chan_exit
+    opp_label = "channel_exit" if chan_exit else "opposite_signal"
     has_tp_cols = "tp_up_end" in sig.columns
     for r in sig.itertuples(index=False):
         cnt["signals"] += 1
@@ -646,6 +745,12 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             jf = jl + 1
             entry_ref = last_close
             p_entry = O[jf] * (1 + side * slip)
+        if dl_runs:
+            ent = ot[jf]
+            if any(a <= ent <= b for a, b in dl_runs):  # filled inside a flat-line run: no trade, does not occupy the symbol
+                cnt["delisted_no_entry"] += 1
+                att("delisted_no_entry", ent)
+                continue
         R = side * (entry_ref - stop)
         if max_cost is not None and (2 * (taker + slip)) / (R / entry_ref) > max_cost:
             cnt["cost_rejected"] += 1
@@ -668,7 +773,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                 tp_price = entry_ref + side * tp1C["r_fallback"] * R
         fix_price = entry_ref + side * fixC["r"] * R if fixC["enabled"] else None
         jopp = n_bars + 1
-        if oppC["enabled"]:
+        if use_opp:
             arr = opp.get(symbol, {}).get(-side)
             if arr is not None and len(arr):
                 kk = int(np.searchsorted(arr, ot[jf], side="right"))  # strictly after the entry bar opened
@@ -686,6 +791,13 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             if level is not None and level != level:
                 level = None
         entry_buffer = buffer
+        d_bar = None  # delisting bar: forced close at its close (phase 1b)
+        if dl_points:
+            k = bisect_left(dl_points, ot[jf])
+            if k < len(dl_points):
+                d_bar = bisect_left(ot, dl_points[k])
+                if d_bar >= n_bars or ot[d_bar] != dl_points[k]:
+                    raise RuntimeError(f"{symbol}: delist bar {dl_points[k]} not found in the cached 15m bars")
         # ---- walk bars
         cur_stop = stop
         kind = "initial"
@@ -765,9 +877,14 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                         legs.append((rem, fix_price, maker, ot[j], 0.0))
                         exit_bar, exit_reason, rem = j, "fixed_r", 0.0
                         break
+            if d_bar is not None and j == d_bar:  # forced close at the delisting bar's close: taker + 3x slippage, no close review
+                p = c_ * (1 - side * 3 * slip)
+                legs.append((rem, p, taker, ot[j], rem * c_ * 3 * slip))
+                exit_bar, exit_reason, rem = j, "delisted", 0.0
+                break
             # (4) close review
             if j >= jopp:
-                pending = "opposite_signal"
+                pending = opp_label
             elif biasC["enabled"] and (b_down[j] if side == 1 else b_up[j]):
                 pending = "bias_1h"
             elif level is not None and ((side == 1 and c_ < level) or (side == -1 and c_ > level)):
@@ -886,9 +1003,16 @@ def _work(symbol: str):
             for r in sig.itertuples(index=False)
         ]
     funding = (market.funding, market.funding_months) if market.funding is not None else None
+    dl = None
+    if cfg.filters["delist_rule"]:
+        if market.delist is None:
+            raise FileNotFoundError("filters.delist_rule needs research/cache/delist.parquet")
+        dl = market.delist.get(symbol)
+        if dl is not None:
+            dl = tuple(np.asarray(x) for x in dl)
     rows, cnt = simulate_symbol(
         cfg, symbol, sig, mk, market.bias_down.get(symbol, ((), (), ())), market.bi_new.get(symbol), opp, market.ticks.get(symbol),
-        funding=funding, attempts_out=att,
+        funding=funding, attempts_out=att, delist=dl,
     )
     return rows, cnt, att
 

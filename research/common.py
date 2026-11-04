@@ -30,7 +30,8 @@ BASELINE_DIR = (
     / "data/reports/b78fb5ba0ff45dde_921628697ec40df8_2024-01-01_2026-10-27_2026-10-30T19-33-48"
 )
 TFS = ("15m", "1h", "4h")
-TF_DELTA = {"15m": pd.Timedelta(minutes=15), "1h": pd.Timedelta(hours=1), "4h": pd.Timedelta(hours=4)}
+TF_DELTA = {"15m": pd.Timedelta(minutes=15), "1h": pd.Timedelta(hours=1), "4h": pd.Timedelta(hours=4), "1d": pd.Timedelta(days=1)}
+DONCHIAN_TFS = ("1h", "4h", "1d")
 _UTC = timezone.utc
 
 
@@ -168,8 +169,8 @@ TRADFI_BASES = (
     "SAMSUNG", "SKHY", "SKHYNIX", "SNDK", "SOXL", "SOXS", "CRCL", "EWY", "SPCX", "DRAM", "KORU", "SNXX",
 )
 MAJORS = ("BTC/USDT", "ETH/USDT")
-TF_US = {"15m": 900_000_000, "1h": 3_600_000_000, "4h": 14_400_000_000}
-BARS_PER_TF = {"15m": 1, "1h": 4, "4h": 16}
+TF_US = {"15m": 900_000_000, "1h": 3_600_000_000, "4h": 14_400_000_000, "1d": 86_400_000_000}
+BARS_PER_TF = {"15m": 1, "1h": 4, "4h": 16, "1d": 96}
 CORE_MIN_DAYS = 274
 
 

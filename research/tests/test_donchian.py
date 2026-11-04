@@ -62,7 +62,7 @@ class DonchianTests(unittest.TestCase):
         for tf in ("1h", "4h"):
             new = pd.read_parquet(C.CACHE / f"signals_donchian_{tf}.parquet")
             old = pd.read_parquet(C.CACHE / f"signals_donchian_{tf}.p0.parquet")
-            self.assertEqual(sorted(new["n"].unique()), [16, 20, 24, 44, 55, 66])
+            self.assertEqual(sorted(new["n"].unique()), sorted(donchian.NS_BY_TF[tf]))  # phase 1b: 4h now carries NS_ALL, 1h is unchanged
             keys = ["time", "symbol", "n", "type"]
             a = new[new["n"].isin([20, 55])].sort_values(keys).reset_index(drop=True)
             b = old.sort_values(keys).reset_index(drop=True)
@@ -87,6 +87,19 @@ class DonchianTests(unittest.TestCase):
         got = [int(x) for x in opp["X/USDT"][-1]]
         want = [int(pd.Timestamp(x).value // 1000) for x in (t, t + pd.Timedelta(hours=2))]
         self.assertEqual(got, want)  # the N = 55 breakout is ignored
+
+    @unittest.skipUnless((C.CACHE / "signals_donchian_4h.p1.parquet").exists() and (C.CACHE / "signals_donchian_1d.parquet").exists(), "phase 1b tables missing")
+    def test_d8_rebuilt_4h_keeps_old_n(self):
+        new = pd.read_parquet(C.CACHE / "signals_donchian_4h.parquet")
+        old = pd.read_parquet(C.CACHE / "signals_donchian_4h.p1.parquet")
+        keys = ["symbol", "type", "time"]
+        a = new[new["n"].isin(donchian.NS_BY_TF["1h"])].sort_values(keys).reset_index(drop=True)
+        b = old.sort_values(keys).reset_index(drop=True)
+        pd.testing.assert_frame_equal(a[b.columns], b)
+        self.assertEqual(sorted(new["n"].unique()), sorted(donchian.NS_ALL))
+        d1 = pd.read_parquet(C.CACHE / "signals_donchian_1d.parquet")
+        self.assertEqual(sorted(d1["n"].unique()), sorted(donchian.NS_ALL))
+        self.assertTrue((d1["time"].dt.hour == 0).all() and (d1["time"].dt.minute == 0).all())
 
 
 if __name__ == "__main__":

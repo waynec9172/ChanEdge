@@ -27,3 +27,5 @@
 | 2026-11-04T15:37:42Z | p1s1_4h_at3 | 8f7b106633df | src=chan tf=4h types=4 filt=top20,htf4h,vol entry=market stop=0.15atr exit=atr3.0 |
 | 2026-11-04T15:37:52Z | p1s1_4h_opp | 3714aba5d2de | src=chan tf=4h types=4 filt=top20,htf4h,vol entry=market stop=0.15atr exit=opp |
 | 2026-11-04T15:38:06Z | p1s1_15m_cur_jevref | 1bc476ad618e | src=chan tf=15m types=4 filt=top20,jev>=0.62,htf4h,vol entry=market stop=0.15atr exit=cur |
+| 2026-11-04T21:14:05Z | p1b_base_1h_n20 | a7f6dc5034d4 | src=donchian tf=1h n=20 types=2 filt=top20,delist entry=market stop=2.0atr exit=opp |
+| 2026-11-04T21:14:16Z | p1b_base_4h_n55 | ee75906aeada | src=donchian tf=4h n=55 types=2 filt=top20,delist entry=market stop=2.0atr exit=opp |

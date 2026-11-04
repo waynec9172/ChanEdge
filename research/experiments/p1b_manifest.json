@@ -1,0 +1,106 @@
+{
+  "run": [
+    {
+      "name": "p1b_base_1h_n20",
+      "kind": "base",
+      "tf": "1h",
+      "n": 20,
+      "exit": "same_n",
+      "exit_n": null,
+      "filter": null,
+      "control": null
+    },
+    {
+      "name": "p1b_base_4h_n55",
+      "kind": "base",
+      "tf": "4h",
+      "n": 55,
+      "exit": "same_n",
+      "exit_n": null,
+      "filter": null,
+      "control": null
+    },
+    {
+      "name": "p1b_tr_4h_n20",
+      "kind": "tr",
+      "tf": "4h",
+      "n": 20,
+      "exit": "half",
+      "exit_n": 10,
+      "filter": null,
+      "control": null
+    },
+    {
+      "name": "p1b_tr_4h_n55",
+      "kind": "tr",
+      "tf": "4h",
+      "n": 55,
+      "exit": "half",
+      "exit_n": 27,
+      "filter": null,
+      "control": null
+    },
+    {
+      "name": "p1b_tr_1d_n20",
+      "kind": "tr",
+      "tf": "1d",
+      "n": 20,
+      "exit": "half",
+      "exit_n": 10,
+      "filter": null,
+      "control": null
+    },
+    {
+      "name": "p1b_tr_1d_n55",
+      "kind": "tr",
+      "tf": "1d",
+      "n": 55,
+      "exit": "half",
+      "exit_n": 27,
+      "filter": null,
+      "control": null
+    },
+    {
+      "name": "p1b_base_1h_n20_bias",
+      "kind": "filter",
+      "tf": "1h",
+      "n": 20,
+      "exit": "same_n",
+      "exit_n": null,
+      "filter": "bias4h",
+      "control": "p1b_base_1h_n20"
+    },
+    {
+      "name": "p1b_base_4h_n55_bias",
+      "kind": "filter",
+      "tf": "4h",
+      "n": 55,
+      "exit": "same_n",
+      "exit_n": null,
+      "filter": "bias4h",
+      "control": "p1b_base_4h_n55"
+    },
+    {
+      "name": "p1b_base_1h_n20_nozs",
+      "kind": "filter",
+      "tf": "1h",
+      "n": 20,
+      "exit": "same_n",
+      "exit_n": null,
+      "filter": "nozs4h",
+      "control": "p1b_base_1h_n20"
+    },
+    {
+      "name": "p1b_base_4h_n55_nozs",
+      "kind": "filter",
+      "tf": "4h",
+      "n": 55,
+      "exit": "same_n",
+      "exit_n": null,
+      "filter": "nozs4h",
+      "control": "p1b_base_4h_n55"
+    }
+  ],
+  "neighbors": {},
+  "skipped": []
+}

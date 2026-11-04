@@ -76,13 +76,52 @@ def attribute(unmatched: pd.DataFrame, sig: pd.DataFrame) -> tuple[dict, pd.Seri
     return reasons, pd.Series(labels, index=unmatched.index)
 
 
+def simulate_with_delist(experiment: str):
+    """Phase 1b (plan E15): the experiment's YAML with delist_rule switched on, simulated in memory. Returns (trades, meta, info)."""
+    import copy
+    import time
+
+    from research import run as R
+    from research import sim
+
+    raw = copy.deepcopy(C.read_yaml(C.EXPERIMENTS / f"{experiment}.yaml"))
+    raw["filters"]["delist_rule"] = True
+    cfg = sim.SimConfig.from_dict(raw)
+    off = sim.SimConfig.from_dict(C.read_yaml(C.EXPERIMENTS / f"{experiment}.yaml"))
+    t0 = time.time()
+    market = sim.load_market(bi_tf=cfg.signals["tf"] if cfg.signals["source"] == "chan" else "15m")
+    signals = sim.select_signals(cfg, market)
+    signals_off = sim.select_signals(off, market)
+    trades, counters = sim.simulate(cfg, market, signals, workers=6)
+    meta = {
+        "config_sha": R.config_sha(cfg.resolved()),
+        "n_signals": int(len(signals)),
+        "n_trades": int(len(trades)),
+        "elapsed_s": round(time.time() - t0, 2),
+    }
+    key = lambda d: set(zip(d["symbol"], d["type"], d["time"]))
+    info = {
+        "delist_filtered": int(signals.attrs.get("delist_filtered", 0)),
+        "dropped_keys": key(signals_off) - key(signals),
+        "counters": counters,
+    }
+    return trades, meta, info
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="research.validate")
     p.add_argument("--experiment", required=True)
-    p.add_argument("--out", default=str(C.OUT / "harness_validation.md"))
+    p.add_argument("--out", default=None)
+    p.add_argument("--delist", action="store_true", help="re-simulate in memory with filters.delist_rule = true (no registry row, no result file)")
     a = p.parse_args(argv)
-    res = pd.read_parquet(C.CACHE / "results" / f"{a.experiment}.parquet")
-    meta = json.loads((C.CACHE / "results" / f"{a.experiment}.json").read_text())
+    if a.out is None:
+        a.out = str(C.OUT / ("harness_validation_delist.md" if a.delist else "harness_validation.md"))
+    delist_info = None
+    if a.delist:
+        res, meta, delist_info = simulate_with_delist(a.experiment)
+    else:
+        res = pd.read_parquet(C.CACHE / "results" / f"{a.experiment}.parquet")
+        meta = json.loads((C.CACHE / "results" / f"{a.experiment}.json").read_text())
     base = load_baseline()
     n_base = len(base)
     if "net_r_ex_funding" in res.columns:  # phase 1 results: baseline r_multiple has no funding, compare without it
@@ -162,6 +201,22 @@ def main(argv=None) -> int:
         "出場用同 N 的反向突破，另加 2 ATR 停損。這是規劃者的解讀。phase 0 不執行這些實驗，只提交 YAML。",
         "",
     ]
+    if delist_info is not None:
+        n_dl = int((res["exit_reason"] == "delisted").sum())
+        pair_dl = int((matched["sim_exit"] == "delisted").sum())
+        um = unmatched
+        by_filter = int(sum((r.symbol, r.signal_type, r.entry_time) in delist_info["dropped_keys"] for r in um.itertuples()))
+        lines += [
+            "## 下架規則影響（只報保真度與筆數，不報任何分段績效）",
+            "",
+            f"- 本檔以 `{a.experiment}` 的設定加上 `filters.delist_rule = true` 在記憶體重新模擬（config_sha `{meta['config_sha']}`），不寫 registry、不寫結果檔。",
+            f"- sim 交易中 `delisted` 出場筆數：{n_dl}",
+            f"- `delist_filtered`（因下架規則剔除的訊號數）：{delist_info['delist_filtered']}",
+            f"- 對上的配對中 sim 出場為 `delisted` 的筆數：{pair_dl}",
+            f"- 因下架剔除而對不上的 baseline 筆數：{by_filter}",
+            f"- 下架進場防線 `delisted_no_entry`：{delist_info['counters'].get('delisted_no_entry', 0)}",
+            "",
+        ]
     lines += ["## 效能與耗時", "", "效能與耗時紀錄見 research/out/harness_perf.md（由 research.perf 產生）。", ""]
     from pathlib import Path
 

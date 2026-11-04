@@ -1,0 +1,41 @@
+{
+  "name": "p1b_base_1h_n20_bias",
+  "description": "1b 纏論過濾：只在 4h 纏論方向同向時進場 1h N=20：收盤突破，初始停損 2 ATR，同 N=20 反向突破出場，前 20 名，下架規則",
+  "signals": {
+    "source": "donchian",
+    "tf": "1h",
+    "types": [
+      "dc20_long",
+      "dc20_short"
+    ],
+    "donchian_n": 20
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "delist_rule": true,
+    "dc_bias_4h": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 2.0,
+    "round_to_tick": true
+  },
+  "exit": {
+    "opposite_signal": {
+      "enabled": true,
+      "tf": "1h"
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

@@ -165,6 +165,35 @@ class FundingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             augment.validate_funding_zip(b"not a zip", hashlib.sha256(b"not a zip").hexdigest(), name, lo, hi)
 
+    def test_f11_url_percent_encoded(self):
+        u = augment.vision_url("monthly", "币安人生USDT", "2026-10")
+        self.assertTrue(u.isascii(), u)
+        self.assertIn("%E5%B8%81%E5%AE%89%E4%BA%BA%E7%94%9F", u)
+        self.assertEqual(
+            augment.vision_url("monthly", "BTCUSDT", "2025-07"),
+            "https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2025-07.zip",
+        )
+        self.assertEqual(
+            augment.vision_url("daily", "BTCUSDT", "2026-10-01"),
+            "https://data.binance.vision/data/futures/um/daily/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-10-01.zip",
+        )
+        # the member-name check still uses the raw (unencoded) name
+        import hashlib
+        import io
+        import zipfile
+
+        name = "币安人生USDT-fundingRate-2026-10.csv"
+        b = io.BytesIO()
+        csv = "calc_time,funding_interval_hours,last_funding_rate\n1790812800000,8,0.0001\n"
+        with zipfile.ZipFile(b, "w") as z:
+            z.writestr(name, csv)
+        good = b.getvalue()
+        lo, hi = augment.month_start_us("2026-10"), augment.month_start_us("2026-11")
+        df = augment.validate_funding_zip(good, hashlib.sha256(good).hexdigest() + "  x.zip", name, lo, hi)
+        self.assertEqual(len(df), 1)
+        with self.assertRaises(ValueError):
+            augment.validate_funding_zip(good, hashlib.sha256(good).hexdigest(), name.replace("币安人生", "%E5%B8%81"), lo, hi)
+
 
 if __name__ == "__main__":
     unittest.main()
