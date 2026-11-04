@@ -3,6 +3,7 @@
 規劃者：Opus。執行者：Sonnet。日期 2026-11-04。分支 `research/phase1`（由已通過的 `research/phase0` 建立）。工作目錄 `/workspace/ChanEdge-research`。
 原始任務：`/workspace/cc/phase1_prompt.md`（A–E 節；相關原文附在本檔附錄 A，照抄）。研究鐵則：`research/CLAUDE.md`。
 裁決紀錄：`/workspace/cc/ph1.decisions.md`。**開工前必讀，裁決優先於本計畫的任何敘述**。本計畫中的「D 編號」指該檔的條目。
+**§8「補充規則（使用者 2026-11-04 裁示）」優先於本計畫其他各節與 D1–D43**；被它取代的句子在原處標「→ §8.x」，索引見 §8.11。S1 開跑前要先做完 §8.8 的補件。
 
 本計畫把 prompt 拆成可照做的步驟，並把所有離散選擇事先寫死。**關卡數字、樣本切分、實驗上限 60、階段 0 驗證門檻一律以原文為準**（第 0 節逐字照抄）。執行中若覺得其中任何一條要改：停下，寫 `/workspace/cc/ph1.QUESTION.md`，結束本次工作。要跑本計畫第 4 節清單以外的實驗，也一樣要寫 QUESTION。其他問題或歧義寫 `/workspace/cc/ph1.issue.md`（背景、選項、建議），然後結束本次工作。
 
@@ -71,7 +72,7 @@
 | 筆數 ≥ 500 | v2 已成交筆數 `>= 500`（限價未成交、確認放棄不算筆數） |
 | ≥ 70% 的季度為正 | 6 個季度（2024Q1…2025Q2，依 signal_time 的 UTC 日期）。季度淨 R = 該季 v2 交易 net_r 的總和；> 0 為正；沒有交易的季算不為正。`正季數 / 6 >= 0.70`，等於至少 5 季（D11） |
 | 手續費 ×1.5 後仍為正 | `mean(gross_r − 1.5 × fee_r − funding_r) > 0`（只放大手續費，不放大滑價與資金費，D28） |
-| 相鄰參數（±20%）同號 | §3.10 對照表中這組設定的每一個鄰居，v2 `mean(net_r) > 0`（D12 P3）。這組設定沒有任何表內參數時，記為「無可測鄰居」，此條視為成立，並在報告中明列（D30） |
+| 相鄰參數（±20%）同號 | §3.10 對照表中這組設定的每一個鄰居，v2 `mean(net_r) > 0`（D12 P3）。~~這組設定沒有任何表內參數時，記為「無可測鄰居」，此條視為成立，並在報告中明列（D30）~~ → §8.2：沒有其他表內參數的組用 sbuf 0.12、0.18 當鄰居；缺鄰居結果算不成立 |
 
 ---
 
@@ -129,7 +130,7 @@ research/
 
 修改：`research/sim.py`、`research/run.py`、`research/validate.py`、`research/signals.py`、`research/donchian.py`、`research/common.py`、`research/report.py`（只加顯示 funding）、`research/out/harness_validation.md`（改由 validate 重新產生）、既有測試檔（只在必要時調整呼叫方式，不得刪減斷言）。
 
-**不得修改**：`src/`、`config/`、`tests/`、`docs/`（全部）、`pyproject.toml`、`research/CLAUDE.md`、`research/plans/phase0.md`、本計畫的 §0、§3.10、§4（這些是寫死的清單）。
+**不得修改**：`src/`、`config/`、`tests/`、`docs/`（全部）、`pyproject.toml`、`research/CLAUDE.md`、`research/plans/phase0.md`、本計畫的 §0、§3.10、§4、§8（這些是寫死的清單；§8 是使用者裁示，`research/plans/phase1_decisions.md` 是裁決副本，執行者都不改）。
 
 ---
 
@@ -238,7 +239,7 @@ BARS_PER_TF = {"15m": 1, "1h": 4, "4h": 16}
 - 每筆欄位：`gross_r`（含滑價、不含手續費）、`fee_r`、`funding_r`、`n_funding`（計入的事件數）、`funding_missing`、`net_r_ex_funding = gross_r − fee_r`、**`net_r = gross_r − fee_r − funding_r`**（注意事項 3）。
 - `validate.py`：結果檔有 `net_r_ex_funding` 欄就用它對 baseline，否則用 `net_r`（D8）。階段 0 的結果檔沒有這欄，所以照舊。
 - 手續費 ×1.5：`net_fee15 = gross_r − 1.5 × fee_r − funding_r`（D28）。
-- 資料只到 2026-09（樣本外的 2026-10 沒有）。本階段不處理，報告註明，留給階段 2。
+- 資料只到 2026-09（樣本外的 2026-10 沒有）。~~本階段不處理，報告註明，留給階段 2。~~ → §8.7：先從 vision 下載，抓不到就用補值（只扣不加），補值事件與 `funding_missing` 的新意思見 §8.7 B。
 
 ### 3.6 模擬器輸出：trades 與 attempts
 
@@ -292,7 +293,8 @@ attempts 欄位：`attempt_id, signal_id, symbol, tf, type, side, signal_time, s
 | fill_rate | filled / (filled + unfilled)（限價）；`abandon_rate`（確認） |
 | exit_reasons | 出場原因分布 |
 | n_cross | exit_time ≥ 2025-07-01 00:00 UTC 的筆數（D34） |
-| n_funding_missing | funding_missing 筆數 |
+| n_funding_missing | funding_missing 筆數（→ §8.7：= 資金費補值的受影響筆數，另報 basis = market 的筆數） |
+| net_slip3 | `mean(net_r − 2 × slip_r)`（→ §8.1：滑價 ×3 淨 R，參考，不是關卡） |
 
 任何一組 v2 淨 R ≥ +0.5R（使用者原文：「出現每筆 +0.5R、回撤 5%，第一反應應該是懷疑過擬合或程式錯誤」）：在該輪報告標紅「疑似錯誤」，驗收者要抽 20 筆逐筆手算。這不是關卡，不得據此刪改實驗。
 
@@ -302,18 +304,20 @@ attempts 欄位：`attempt_id, signal_id, symbol, tf, type, side, signal_time, s
 
 - P1：`net_r > 0`。
 - P2：`net_fee15 >= −0.02`（「大幅轉負」= < −0.02R）。
-- P3：§3.10 對照表中這組設定的每個鄰居 `net_r > 0`；沒有表內參數 → 「無可測鄰居」，P3 成立（D30）。
+- P3：§3.10 對照表中這組設定的每個鄰居 `net_r > 0`；~~沒有表內參數 → 「無可測鄰居」，P3 成立（D30）。~~ → §8.2：沒有其他表內參數的組用 sbuf 0.12、0.18；缺鄰居結果 → P3 不成立。
 - 符合 P1–P3 的組依 v2 net_r 由高到低，同分取 v2 n 多的，再同分取名稱字典序，取最多 2 組。**不到 2 組就照實晉級 1 組或 0 組，不硬湊。**
-- Donchian 兩組與 15m+JEV 參考列**不參加晉級**。
+- Donchian 兩組與 15m+JEV 參考列**不參加晉級**。4h 七組也不參加（→ §8.5）。
 - 誰決定：執行者只負責跑實驗、跑鄰居、產生表格（表格可以列 P1–P3 的機械判定），**不寫晉級名單**。驗收者（Opus）自己重算後寫 `/workspace/cc/ph1.promote.S{1,2}.md`（§6）。
-- 鄰居觸發（D24）：每一輪，凡是符合 P1 且 P2 的組（S1 含 Donchian、不含 JEV 參考列；S2 含市價列；S3 含基底），執行者都要把它的鄰居跑完。
-- 推論：S2 的候選包含市價列（就是 S1 晉級組本身，結果與鄰居都相同），所以 S1 有晉級時 S2 不會是 0 組；同理 S3 的受檢組含基底。「無候選」實際上只會發生在 S1 或 S3。
+- 鄰居觸發（D24）：每一輪，凡是符合 P1 且 P2 的組（S1 含 Donchian、不含 JEV 參考列；S2 含市價列；S3 含基底），執行者都要把它的鄰居跑完。（→ §8.4 第 4 點：S1 另加 v2 毛 R ≥ +0.05 各組的 sbuf 鄰居；→ §8.5：4h 參考列不跑。）
+- 推論：S2 的候選包含市價列（就是 S1 晉級組本身，結果與鄰居都相同），所以 S1 有晉級時 S2 不會是 0 組；同理 S3 的受檢組含基底。「無候選」實際上只會發生在 S1 或 S3。（→ §8.4：走 fallback 時市價列不是 S2 候選，S2 也可能無候選。）
 
 **關卡 A**（只在 S3 判定，D18）：受檢組 = S3 各組（含沿用列）＋它們的基底（S2 晉級組）。六條照 §0.6，全部用 v2，同時另列獨立版的六條結果；兩版結論不同就標出來（D10）。通過的組依 v2 net_r 取前 3。Donchian 在 S1 另外檢查關卡 A（只用於研究停損條件的判讀）。
 
-**無候選**（注意事項第 10 點）：任何一輪結束時沒有可晉級的組（S3 是沒有組通過關卡 A），就直接寫 `phase1.md` 的「無候選」結論，不再用剩下的名額找補。
+**無候選**（注意事項第 10 點）：任何一輪結束時沒有可晉級的組（S3 是沒有組通過關卡 A），就直接寫 `phase1.md` 的「無候選」結論，不再用剩下的名額找補。（→ §8.4：S1 沒有正常晉級時，先照使用者裁示的限價 fallback 判定；連 fallback 都是 0 組才算 S1 無候選。）
 
 ### 3.10 相鄰參數對照表（注意事項第 7 點；寫死，事後不可改）
+
+**→ §8.2（使用者 2026-11-04 裁示，S1 開跑前更新）：本表新增 `sbuf`（`stop.buffer_atr` 0.15 → 0.12、0.18），下方「不測鄰居的參數」段落也已改寫。以 §8.2 的更新版對照表為準。**
 
 規則：連續參數取 ±20%（照原文「相鄰參數（±20%）」與例子「固定 2R 的鄰居是 1.6R 和 2.4R；ATR 追蹤 2.5 的鄰居是 2.0 和 3.0」）；整數根數取 ±1（例子「限價有效根數 N 的鄰居是 N±1」）。每個鄰居一次只改一個參數，其他保持原值。一組設定的鄰居 = 它用到的所有表內參數的鄰居聯集。
 
@@ -335,7 +339,7 @@ attempts 欄位：`attempt_id, signal_id, symbol, tf, type, side, signal_time, s
 | `dcn` | `signals.donchian_n`（types 跟著改成 `dc{N}_long/short`） | donchian_1h_n20 | 20 | 16、24 |
 | `dcn` | `signals.donchian_n` | donchian_4h_n55 | 55 | 44、66 |
 
-**不測鄰居的參數**（D13、D30）：訊號週期（15m/1h/4h 不是彼此的鄰居）；出場種類 cur / rat / opp（沒有數值參數）；TP1 50% 與 1.5R 後備、保本 1R、ATR 追蹤啟動門檻 0、ATR 週期 14、停損 buffer（纏論 0.15 ATR、Donchian 2 ATR）、波動帶 [0.001, 0.03]——這些沿用現行系統或原文、本階段沒有搜尋；開關類（`htf_4h`、`exclude_tradfi`、`require_close_beyond`）；限價 `signal_close` 的價位（offset 0 的 ±20% 仍是 0，只測 `limn`）；成本參數。
+**不測鄰居的參數**（D13、D30）：訊號週期（15m/1h/4h 不是彼此的鄰居）；出場種類 cur / rat / opp（沒有數值參數）；TP1 50% 與 1.5R 後備、保本 1R、ATR 追蹤啟動門檻 0、ATR 週期 14、停損 buffer（~~纏論 0.15 ATR~~ → §8.2 改為 sbuf 鄰居、Donchian 2 ATR）、波動帶 [0.001, 0.03]——這些沿用現行系統或原文、本階段沒有搜尋；開關類（`htf_4h`、`exclude_tradfi`、`require_close_beyond`）；限價 `signal_close` 的價位（offset 0 的 ±20% 仍是 0，只測 `limn`）；成本參數。
 
 **數值格式**：鄰居實驗名 `<原名>__nb_<代號>_<值>`，值的小數點寫成 `p`（`1p6`、`0p496`、`1p04`、`0p008`、`3`、`0`）。YAML 放 `research/experiments/neighbors/`，`description` 以 `NEIGHBOR of <原名>: <參數>=<值>` 開頭。
 
@@ -365,6 +369,7 @@ attempts 欄位：`attempt_id, signal_id, symbol, tf, type, side, signal_time, s
 - JEV（參考，不排名）：`net(p1s1_15m_cur_jevref) − net(p1s1_15m_cur)`。
 - 「改善最多的槓桿」= 上面四項中 Δ 最大的那項；沒跑到的輪次標「未測」。
 - 纏論最佳組：有通過關卡 A 時取通過組第 1 名；否則取全部纏論主實驗（不含參考列）中 v2 net_r 最高者。和 `donchian_1h_n20`、`donchian_4h_n55` 並排比較 §3.8 的全部 v2 指標，另列 JEV 參考列。
+- → §8.5：4h 七組是參考列。週期槓桿主值只用 `net(1h,e) − net(15m,e)`，4h − 15m 另列參考；最佳纏論組不含 4h，另列「4h 最佳（參考）」。
 
 ---
 
@@ -436,6 +441,8 @@ attempts 欄位：`attempt_id, signal_id, symbol, tf, type, side, signal_time, s
 
 `description` 由 gen 產生，例如 `S1 1h fx2：硬閘門（4h 方向、波動帶），下一根開盤市價，固定 2R（maker 掛單）`。
 
+→ §8.2、§8.5（使用者 2026-11-04 裁示）：#1、2、7、8、9、14 的「表內鄰居」改為 sbuf 0.12、0.18；#15–21（4h）的「參加排名」改為「否（參考：4h）」，不跑鄰居。其他欄與 YAML 內容不變。
+
 ### 4.2 S2（參數化；S1 晉級名單代入）
 
 令 `B ∈ PROMOTED(S1)`（0–2 組，來自 `/workspace/cc/ph1.promote.S1.md` 的 `PROMOTED:` 行），`b` = B 去掉 `p1s1_` 的部分（例如 `1h_fx2`）。每個 B 產生 4 列，其中 3 列是新實驗：
@@ -447,7 +454,7 @@ attempts 欄位：`attempt_id, signal_id, symbol, tf, type, side, signal_time, s
 | 限價@中點 | `p1s2_<b>_lm` | `{"mode": "limit", "limit": {"price": "defend_frac", "offset": 0.5, "valid_bars": 4}}` | 是 | limn 3、5；limf 0.4、0.6 |
 | 等 1 根確認 | `p1s2_<b>_cf1` | `{"mode": "confirm", "confirm": {"bars": 1, "require_close_beyond": true}}` | 是 | cfk 0、2 |
 
-S2 新實驗最多 6 個。S2 候選 = 這 ≤ 8 列（含市價列）。
+S2 新實驗最多 6 個。S2 候選 = 這 ≤ 8 列（含市價列）。（→ §8.4 第 6 點：S1 走 fallback 時，每個基底只有 lc、lm 兩列新實驗，市價列只當對照、不是候選，最多 4 個。）
 
 ### 4.3 S3（參數化；S2 晉級名單代入）
 
@@ -569,9 +576,9 @@ S3 新實驗最多 16 個（依目前資料，xtf 一定會跳過，所以實際
 - `test_p2_new_keys_optional_and_validated`：新鍵可省略；未知鍵仍報錯；`htf_4h/vol_band` 用在 donchian 報錯；`jev_min` 用在 1h 報錯；`min_stop_*` ≤ 0 報錯。
 - `test_p3_registry_rules`（暫存 registry）：`__nb_` 名字不算 60；60 個主實驗後第 61 個主實驗被拒、鄰居仍可跑；同名無 `--rerun` 被拒；`--rerun` 同 sha 可、不同 sha 拒；`__nb_` 名字沒加 `--neighbor` 被拒；`--neighbor` 名字沒有 `__nb_` 被拒。
 - `test_p4_check_writes_nothing`：`--check` 不改 registry、不改 results（用暫存目錄或合成）。
-- `test_p5_gen_s1_matches_plan`：`phase1.gen_specs("S1")` 正好是 §4.1 的 24 個名稱，每個的 tf、exit、filters 與計畫表相同（在測試裡把 §4.1 的表再寫一次當期望值）。
-- `test_p6_neighbor_table`：fx2 → 1.6/2.4；fx3 → 2.4/3.6；at3 → 2.4/3.6；lm → limn 3/5 + limf 0.4/0.6；cf1 → K=0 變市價、K=2；ms13a → 1.04/1.56；jev062 → 0.496/0.744；donchian_1h_n20 → 16/24（types 一起改）；cur/rat/opp → 無鄰居。
-- `test_p7_quarters_and_gate_a`：合成 v2 交易：6 季中 5 季正 → 季度條件過、4 季正 → 不過；空季算不為正；n = 499 → 筆數不過；PF、淨 R 用原始浮點數比較（0.0799999 不過）；無可測鄰居 → 鄰居條件成立且標記。
+- `test_p5_gen_s1_matches_plan`：`phase1.gen_specs("S1")` 正好是 §4.1 的 24 個名稱，每個的 tf、exit、filters 與計畫表相同（在測試裡把 §4.1 的表再寫一次當期望值）。（→ §8.5 第 6 點：4h 七組 ranked = false。）
+- `test_p6_neighbor_table`：fx2 → 1.6/2.4；fx3 → 2.4/3.6；at3 → 2.4/3.6；lm → limn 3/5 + limf 0.4/0.6；cf1 → K=0 變市價、K=2；ms13a → 1.04/1.56；jev062 → 0.496/0.744；donchian_1h_n20 → 16/24（types 一起改）；~~cur/rat/opp → 無鄰居~~。（→ §8.2 測試更新：cur/rat/opp → sbuf 0.12/0.18 等。）
+- `test_p7_quarters_and_gate_a`：合成 v2 交易：6 季中 5 季正 → 季度條件過、4 季正 → 不過；空季算不為正；n = 499 → 筆數不過；PF、淨 R 用原始浮點數比較（0.0799999 不過）；~~無可測鄰居 → 鄰居條件成立且標記~~。（→ §8.2 測試更新：缺鄰居結果 → 第 6 條不成立並標記。）
 - `test_p8_eligibility_ranking`：P1/P2/P3 與排序（同分取 n 多、再取名稱）；符合的只有 1 組時只回傳 1 組。
 
 既有 `test_sim.py`、`test_signals.py`、`test_run_report.py` 必須照樣通過（`test_run_report` 的 60 上限測試若因新算法要調整，只能改呼叫方式，不能刪斷言）。
@@ -628,6 +635,7 @@ python -m research.phase1 final [--promote-dir /workspace/cc] [--out PATH]   # �
 
 預估：主實驗約 15–30 分鐘；鄰居約 10–20 分鐘。
 
+0. 先做完 §8.8 的補件（使用者 2026-11-04 裁示），A1–A9 全部通過並 commit，才做第 1 步。
 1. `nohup setsid .venv/bin/python -m research.phase1 runround S1 --workers 6 > research/cache/logs/S1_run.log 2>&1 &`，輪詢到 `# DONE S1`。
 2. `.venv/bin/python -m research.phase1 table S1`（先產生，讓鄰居觸發用的 P1/P2 有數字）。
 3. `.venv/bin/python -m research.phase1 sanity S1`，必須 OK：
@@ -635,7 +643,7 @@ python -m research.phase1 final [--promote-dir /workspace/cc] [--out PATH]   # �
    - 所有交易：`entry_time >= signal_time`、`exit_time >= entry_time`、`r_dist > 0`。
    - `p1s1_15m_cur` 的每筆獨立版交易都能用 `(symbol, type, signal_time)` 在 `p0_perf_15m_all` 找到，且 `net_r_ex_funding` 與 p0 的 `net_r` 最大絕對差 ≤ 1e-9（同一模擬器、訊號是子集）。
    - 樣本內 `funding_missing` 筆數（預期 0；> 0 就列出）。
-4. `nohup setsid .venv/bin/python -m research.phase1 neighbors S1 --workers 6 > research/cache/logs/S1_nb.log 2>&1 &`，輪詢到 `# DONE`；`neighbors S1 --status` 缺少數 = 0。
+4. `nohup setsid .venv/bin/python -m research.phase1 neighbors S1 --workers 6 > research/cache/logs/S1_nb.log 2>&1 &`，輪詢到 `# DONE`；`neighbors S1 --status` 缺少數 = 0。（→ §8.2、§8.4 第 4 點：含 cur/rat/opp 的 sbuf 鄰居，以及 15m、1h 中 v2 毛 R ≥ +0.05 各組的 sbuf 鄰居；4h 參考列不跑。）
 5. 再跑一次 `table S1`（含鄰居）與 `gatea --donchian --out research/out/phase1_S1_donchian_gateA.md`。
 6. `.venv/bin/python -m research.phase1 audit` 必須 OK：
    - registry 每一列的名字都有 YAML（主實驗在 `research/experiments/`、鄰居在 `neighbors/`），且 YAML 現在的 config_sha 等於 registry 的 sha。
@@ -643,11 +651,11 @@ python -m research.phase1 final [--promote-dir /workspace/cc] [--out PATH]   # �
    - registry 資料列數 = `runs.log` 列數。
    - 主實驗不同名字數 ≤ 60；本輪新增的主實驗名稱 ⊆ manifest 該輪清單（不允許清單外）。
    - `oos_log.md` 是 0 位元組。
-7. commit（`Phase 1 S1: 24 runs + neighbors`），報告附 S1 v2 主表（淨 R、毛 R、手續費 R、funding_r、PF、筆數）。**不要寫晉級名單，不要跑 S2。**
+7. commit（`Phase 1 S1: 24 runs + neighbors`），報告附 S1 v2 主表（淨 R、毛 R、手續費 R、funding_r、PF、筆數；→ §8.1 加滑價×3 淨 R 參考欄）與 §8.8 第 4 點的 fallback 機械判定表。**不要寫晉級名單，不要跑 S2。**
 
 ### 5.3 S2（依 promote.S1 代入；跑完就停）
 
-1. `.venv/bin/python -m research.phase1 gen S2 --promote /workspace/cc/ph1.promote.S1.md`（`PROMOTE_COUNT: 0` 時不會走到這裡）。
+1. `.venv/bin/python -m research.phase1 gen S2 --promote /workspace/cc/ph1.promote.S1.md`（`PROMOTE_COUNT: 0` 時不會走到這裡）。（→ §8.4、§8.9：gen 依 promote 檔的 `MODE:` 行決定列；`MODE: fallback` 時每個基底只有 lc、lm。）
 2. `runround S2` → `table S2` → `sanity S2`（另加：限價列 `entry_price == entry_reference`、進場費率 maker；確認列 `entry_time >= signal_time + K×TF`）→ `neighbors S2` → `table S2` → `audit` → commit。
 3. 不寫晉級名單、不跑 S3。
 
@@ -669,12 +677,13 @@ python -m research.phase1 final [--promote-dir /workspace/cc] [--out PATH]   # �
      改善淨 R 最多的槓桿：<週期｜出場｜進場｜過濾>（Δ淨 R +x.xxxx：<A> → <B>）；其他：…
      實驗用量：主實驗 X / 60（含階段 0 的 2 個）、鄰居 Y 個（不計）；oos_log.md 為空；研究停損判讀：…
      ```
-   - 給使用者的摘要（注意事項「階段 1 結束後貼給我」五項）：開頭 5 行；S1 完整 v2 表（淨 R、毛 R、手續費 R、funding_r、PF、筆數）；各輪晉級名單與理由（讀 promote 檔原文）；通過關卡 A 的組與每條門檻的實際數字；纏論最佳組與 Donchian 並排。
+     （→ §8.2：第 2 行的鄰居欄只剩「全正｜有負」；→ §8.5：最佳纏論組不含 4h。）
+   - 給使用者的摘要（注意事項「階段 1 結束後貼給我」五項）：開頭 5 行；S1 完整 v2 表（淨 R、毛 R、手續費 R、funding_r、PF、筆數；→ §8.1 加滑價×3 淨 R 參考欄，4h 列標參考）；各輪晉級名單與理由（讀 promote 檔原文）；通過關卡 A 的組與每條門檻的實際數字；纏論最佳組與 Donchian 並排。
    - 全部實驗的表（獨立版與 v2 兩版；含鄰居表）。
    - 通過關卡 A 的最多 3 組 + 穩健性檢查（全部用既有結果計算，不跑新模擬）：鄰居表；各季與各月 v2 淨 R；獨立版 vs v2；多空、分群；去掉 v2 最好的 1% 交易後的淨 R；去掉淨 R 貢獻最大的 3 個幣後的淨 R；手續費 ×1.5 與 ×2 的淨 R；n_cross 與去掉這些交易後的淨 R。
    - 沒有任何一組通過時：明寫「**無候選**」；§3.12 的槓桿表；纏論版與基準策略的比較。不追加實驗。
-   - 研究停損判讀（原文：「全部組合都過不了 A（包含 1h、4h 和限價進場）…如果基準趨勢策略能過，改成『趨勢策略為主、纏論當過濾』。基準也不行，就停下來重新想。」）：照實列出 Donchian 的關卡 A 結果；若在 S1 就結束，要寫明「限價進場沒有測到，研究停損條件未完整檢驗」，交使用者判斷（D40）。
-   - 註記：傳統金融永續在樣本內從未進前 20 名，S3 的排除檢驗在樣本內無法回答（D15）；資金費資料缺 2026-10（樣本外）；D10 的兩版結論差異；無可測鄰居的組；所有沿用與跳過。
+   - 研究停損判讀（原文：「全部組合都過不了 A（包含 1h、4h 和限價進場）…如果基準趨勢策略能過，改成『趨勢策略為主、纏論當過濾』。基準也不行，就停下來重新想。」）：照實列出 Donchian 的關卡 A 結果；~~若在 S1 就結束，要寫明「限價進場沒有測到，研究停損條件未完整檢驗」，交使用者判斷（D40）。~~ → §8.4 第 10 點。
+   - 註記：傳統金融永續在樣本內從未進前 20 名，S3 的排除檢驗在樣本內無法回答（D15）；資金費資料缺 2026-10（樣本外）；D10 的兩版結論差異；~~無可測鄰居的組~~；所有沿用與跳過。（→ §8.6：改寫成「階段 2 主結果排除這 25 個幣，含它們的版本另列參考」；→ §8.7：改寫成 2026-10 資金費的下載結果與補值受影響筆數；→ §8.2：不再有無可測鄰居的組。）
 3. commit（`Phase 1: results and conclusion`）。
 
 **final 驗收**：`final --out /tmp/p1.md` 與 commit 版在標記行以上 `diff` 無輸出；開頭 5 行與 promote 檔、gatea 表、table 數字一致；`audit` OK；`oos_log.md` 空；抽 3 組 `--check` OK。
@@ -694,7 +703,7 @@ python -m research.phase1 final [--promote-dir /workspace/cc] [--out PATH]   # �
 
 **prep 另外**：§5.1 的 P1–P13 全部重跑。
 
-**S1、S2 晉級**：自己用 v2 重算 P1–P3（可直接讀 results 與 attempts，用 `research.metrics` 或自寫 pandas）；依 §3.9 排序取最多 2 組，不足不湊。寫 `/workspace/cc/ph1.promote.S1.md`（S2 同理），格式：
+**S1、S2 晉級**：自己用 v2 重算 P1–P3（可直接讀 results 與 attempts，用 `research.metrics` 或自寫 pandas）；依 §3.9 排序取最多 2 組，不足不湊。寫 `/workspace/cc/ph1.promote.S1.md`（S2 同理），格式：（→ §8.9：**S1 的晉級檔改用 §8.9 的格式**，加 `MODE:` 行；S1 正常晉級 0 組時先判 §8.4 的 fallback，`PROMOTE_COUNT` 包含 fallback 晉級的組數並註明，只有連 fallback 都沒有才寫 0。下面的格式只用於 S2。）
 
 ```text
 # S1 晉級（驗收者判定）
@@ -713,7 +722,7 @@ PROMOTE_COUNT: <列出的組數，0–3>
 （每組六條門檻的實際數字表）
 ```
 
-`PROMOTE_COUNT: 0` 時管線會進 final 並寫「無候選」。
+`PROMOTE_COUNT: 0` 時管線會進 final 並寫「無候選」。（→ §8.4 第 8、9 點：S1 只有在 fallback 也是 0 組時才寫 0。）
 
 ---
 
@@ -831,3 +840,364 @@ commit 並 push，不開 PR。
 > 我判讀完，再給你階段 2 要注意的地方。
 
 （第 8 點「S2 約 8 組、S3 約 20 組」：本計畫 S2 是 8 列比較、其中 6 組新實驗；S3 每基底 8 種過濾、最多 16 組新實驗；備用 10 組；總數 ≤ 58，見 §4。）
+
+---
+
+## 8. 補充規則（使用者 2026-11-04 裁示）
+
+來源：`/workspace/cc/ph1.user_amend.md`（使用者 2026-11-04 17:59 原文，§8.0 全文照抄）。本節由規劃者（Opus）把七條規則轉成可照做的規格；落實時規劃者做的選擇記為 D44–D53（`/workspace/cc/ph1.decisions.md`。本次 commit 時的副本在 `research/plans/phase1_decisions.md`，之後若有新裁決，以 `/workspace/cc/` 那份為準）。
+
+- **優先順序**：本節 > 本計畫其他各節 > D1–D43。被本節取代或補充的舊敘述，已在原處標「→ §8.x」，完整索引見 §8.11。
+- **沒有改動**：關卡 A、B 的數字，樣本切分，實驗上限 60，階段 0 驗證門檻。名額核算見 §8.10（最多 58 ≤ 60），所以不寫 QUESTION。
+- 本節的程式部分在 **S1 第一個實驗之前**做完（§8.8）。
+
+### 8.0 使用者原文（照抄）
+
+```text
+（使用者 2026-11-04 17:59 原文）
+## Opus 的四個判斷
+
+**1. 手續費 ×1.5 只放大手續費：可以，但滑價壓力要另外報。**
+
+關卡 A 原文寫的就是「手續費 ×1.5」，照這個判定沒問題。不過 1bp 的滑價對山寨幣的停損出場偏樂觀。建議每組多報一欄「滑價 ×3」的淨 R，只當參考資訊，不當關卡。
+
+**2. 「無可測鄰居就直接算過」：不要這樣，每組都有可測的鄰居。**
+
+所有組都用 `stop_buffer_atr` 0.15，這本身就是一個參數。沒有其他可調參數的組，就用停損緩衝 0.12 和 0.18 當鄰居，一樣要同號才算過。這樣現行規則、反向訊號出場這類組才不會比別組容易過關。鄰居測試照之前說的，不算進 60 次。
+
+**3. 跨過 2025-07-01 的單算樣本內，另外報筆數和拿掉後的淨 R：同意。**
+
+**4. S1 沒有候選時，限價進場等於完全沒測到：這點要現在就決定。**
+
+限價進場主要是省成本，在 1% 停損下每筆約 +0.08R。所以市價版小虧的組，換成限價有可能轉正。我之前說「一次無候選就結束」，在這裡太嚴了。改成以下規則，寫進 phase1.md：
+
+> S1 沒有任何一組通過時，S2 仍然要跑，條件是：取「每幣最多一筆版」裡毛 R ≥ +0.05、而且停損緩衝鄰居同號的組，最多 2 組，只測限價進場。沒有組達到毛 R +0.05，階段 1 才結束。
+
+要求毛 R ≥ +0.05，是因為限價最多只能省下大約這個量級的成本，毛 R 更低的組不可能靠限價轉正。
+
+## 查到的三件事
+
+**4h 湊不到 500 筆：同意不放寬門檻。** 那 7 組 4h 就當參考資訊，不用改分配。
+
+**傳統金融永續：現在就定，階段 2 主結果排除它們。** 它們在樣本內從沒進過前 20 名，但 2026 年的樣本外裡有（XAU、XAG、CL 等都出現過）。沒在樣本內測過的東西，不該算進樣本外的判定。
+- 階段 2 的主結果：排除這 25 個幣。
+- 包含它們的版本：另列一行，只當參考資訊。
+這條現在先寫進 phase1.md，不要等看到樣本外結果再決定。
+
+**資金費率只到 2026-09：會影響階段 2。** 階段 1 用不到，但樣本外一路到 2026-10-27，最後近兩個月沒有資金費率資料。依序處理：
+1. 現在已經 11 月初，先試著從 Binance vision 下載 2026-10 的月檔或日檔。
+2. 抓不到的話，用規則補：缺資料的月份，每筆單用該幣前 3 個月資金費率絕對值的中位數當成本（只扣，不加）。另外報受影響的筆數。
+這條也是現在就寫進計畫。
+
+## 其他
+- 補充規則請 Opus 另外 commit 成 phase1.md 的補充段落，再讓 Sonnet 開跑 S1。
+```
+
+### 8.1 每組加報「滑價 ×3」淨 R（參考欄，不是關卡）
+
+原文：
+
+> 建議每組多報一欄「滑價 ×3」的淨 R，只當參考資訊，不當關卡。
+
+規格（D44）：
+
+1. 模擬器每筆交易新增欄位 `slip_r`，意思是「這筆交易實際付出的滑價（1bp 那一份）換算成 R」：
+   - 進場項：市價進場與確認後進場是 `O[jf] × slip`；限價進場是 0。
+   - 出場項：每一條有套滑價的腿（所有停損類、下一根開盤出場、`current` 的 TP1、資料結束）是 `w × raw × slip`。raw 是套滑價前的價格（停損價、跳空時的 open、TP1 目標價或 open、最後收盤）。`fixed_r` 的 maker 腿是 0。
+   - `slip_r = (進場項 + Σ 出場項) / R_dist`，一定 ≥ 0。等價寫法：`[side × (p_entry − O[jf]) + Σ w × side × (raw − p)] / R_dist`。
+   - slip = `costs.slippage_bps / 1e4`（本階段 1bp）。
+2. 指標 `net_slip3 = mean(net_r − 2 × slip_r)`。意思是把每一條有滑價的腿從 1bp 改成 3bp（多付 2 倍）。
+   - 手續費不重算。手續費以成交價計，差異約是 taker 費率 × 2bp，量級 < 1e-4R，忽略。
+   - 出場路徑不變：停損、停利、保本、追蹤都以 entry_reference 和 K 線價位判定，不讀含滑價的成交價；`max_cost_r` 本階段都是 null。所以用 3bp 重跑會得到同樣的出場，這一欄等於 3bp 重跑的淨 R，不必另跑實驗。
+3. 報在：每輪表的 v2 主表與獨立版主表（每一列，含 Donchian、參考列）；`gatea` 表（欄名「滑價×3 淨 R（參考，不是關卡）」）；`phase1.md` 的 S1 完整表、纏論最佳組與 Donchian 的並排比較。鄰居表不用加。
+4. **不參與任何判定**：P1–P3、關卡 A、§8.4 的 fallback、排序都不看 `net_slip3`。
+5. 欄位順序：trades 在 `funding_missing` 之後依序追加 `slip_r`、`n_funding_imputed`（§8.7），然後才是 `sample`。`--check` 只比雙方都有的欄，所以階段 0 的結果檔不受影響。
+6. 測試 `research/tests/test_limit_cost.py::test_k6_slip_r_and_slip3`：
+   - (a) 市價進場 + 結構停損：slip_r 手算 = (O×1bp + stop×1bp) / R；跳空停損時用 open。
+   - (b) 限價進場 + fixed_r 出場：slip_r = 0。
+   - (c) `current` 有 TP1：TP1 腿以權重 0.5 計入。
+   - (d) 同一組合成資料改用 `slippage_bps: 3` 重跑：每筆的 exit_time、exit_reason 完全相同，`net_r` 與 1bp 版的 `net_r − 2 × slip_r` 絕對差 < 1e-4。
+
+### 8.2 相鄰參數：每組都要有可測的鄰居（取消 D30 的「無可測鄰居算過」）
+
+原文：
+
+> 所有組都用 `stop_buffer_atr` 0.15，這本身就是一個參數。沒有其他可調參數的組，就用停損緩衝 0.12 和 0.18 當鄰居，一樣要同號才算過。這樣現行規則、反向訊號出場這類組才不會比別組容易過關。鄰居測試照之前說的，不算進 60 次。
+
+規格（D45）：
+
+1. 「表內參數」指下表中 `sbuf` 以外的代號：fixr、atrm、limn、limf、cfk、msa、msp、jev、dcn。一組設定的表內參數 = 它自己用到的，加上繼承的（S2 列繼承基底 B 的出場參數，S3 列繼承 B2 的全部表內參數），照 §3.10、§4.2、§4.3 原規則。
+2. 表內參數為空的組，鄰居 = `sbuf` 0.12 與 0.18 兩個。表內參數不為空的組照舊，**不加** sbuf。（§8.4 的 fallback 另有規定，那是 fallback 的條件，不是 P3 的鄰居。）
+3. 「同號」= 每個鄰居 v2 `mean(net_r) > 0`，用在晉級 P3 與關卡 A 第 6 條，和其他鄰居一樣。
+   - **不再有「無可測鄰居（成立）」**。程式裡刪掉這個分支。
+   - 任何一組缺了必要的鄰居結果：P3 與關卡 A 第 6 條記「缺鄰居結果」，判為**不成立**。執行者要補跑到 `neighbors <輪> --status` 的缺少數 = 0。
+4. 會用 sbuf 的組（依目前清單）：
+   - S1：`p1s1_15m_cur`、`p1s1_15m_rat`、`p1s1_15m_opp`、`p1s1_1h_cur`、`p1s1_1h_rat`、`p1s1_1h_opp`。4h 的 cur/rat/opp 是參考列（§8.5），不跑鄰居。`p1s1_15m_cur_jevref` 有 jev 參數而且是參考列，照 D24 不跑。
+   - S2：市價列就是 B 本身，鄰居同 B。`lc`、`lm`、`cf1` 列有 limn、limf、cfk，不加 sbuf。
+   - S3：B2 沒有表內參數時，`no4h`、`xtf` 兩列（它們本身也沒有表內參數）用 sbuf。ms*、jev* 列有自己的參數，不加。
+   - Donchian：有 dcn，不加 sbuf（Donchian 的 2 ATR 停損照舊不測）。
+5. YAML：照抄原組，只把 `stop.buffer_atr` 改成字面值 `0.12` 或 `0.18`。直接寫這兩個數，不要用 0.15 × 0.8 去算，免得浮點尾數讓 sha 和名稱對不上。
+   - 名稱：`<原名>__nb_sbuf_0p12`、`<原名>__nb_sbuf_0p18`。
+   - description：`NEIGHBOR of <原名>: stop.buffer_atr=0.12`（0.18 同理）。
+   - 模擬器的初始結構停損與棘輪停損都讀這個鍵（`sim.py` 的 `buffer` 與 `entry_buffer`），所以鄰居兩者一起變。這是同一個參數，照這樣做。
+6. 不算進 60。命名、registry、沿用規則照 §3.10、§3.11、D19。
+7. 觸發照 D24（符合 P1 且 P2 的組才跑），另加 §8.4 第 4 點的 fallback 觸發。
+
+**更新版相鄰參數對照表**（取代 §3.10 的表；§3.10 的其他規則、數值格式、沿用照舊）：
+
+| 代號 | 參數 | 出現在 | 原值 | 鄰居 |
+| --- | --- | --- | --- | --- |
+| `fixr` | `exit.fixed_r.r` | 出場 fx2 | 2.0 | 1.6、2.4 |
+| `fixr` | `exit.fixed_r.r` | 出場 fx3 | 3.0 | 2.4、3.6 |
+| `atrm` | `exit.atr_trail.mult` | 出場 at2 | 2.0 | 1.6、2.4 |
+| `atrm` | `exit.atr_trail.mult` | 出場 at3 | 3.0 | 2.4、3.6 |
+| `limn` | `entry.limit.valid_bars` | 進場 lc、lm | 4 | 3、5 |
+| `limf` | `entry.limit.offset`（defend_frac） | 進場 lm | 0.5 | 0.4、0.6 |
+| `cfk` | `entry.confirm.bars` | 進場 cf1 | 1 | 0（= `market_next_open`，其他不變）、2 |
+| `msa` | `filters.min_stop_atr` | 過濾 ms10a | 1.0 | 0.8、1.2 |
+| `msa` | `filters.min_stop_atr` | 過濾 ms13a | 1.3 | 1.04、1.56 |
+| `msp` | `filters.min_stop_pct` | 過濾 ms1p | 0.010 | 0.008、0.012 |
+| `msp` | `filters.min_stop_pct` | 過濾 ms15p | 0.015 | 0.012、0.018 |
+| `jev` | `filters.jev_min` | 過濾 jev055 | 0.55 | 0.44、0.66 |
+| `jev` | `filters.jev_min` | 過濾 jev062、S1 參考列 | 0.62 | 0.496、0.744 |
+| `dcn` | `signals.donchian_n`（types 跟著改成 `dc{N}_long/short`） | donchian_1h_n20 | 20 | 16、24 |
+| `dcn` | `signals.donchian_n` | donchian_4h_n55 | 55 | 44、66 |
+| **`sbuf`** | **`stop.buffer_atr`** | **表內參數為空的纏論組（第 2 點）；§8.4 的 fallback 候選** | **0.15** | **0.12、0.18** |
+
+**更新版「不測鄰居的參數」**（取代 §3.10 同名段落）：訊號週期（15m/1h/4h 不是彼此的鄰居）；出場種類 cur/rat/opp 本身（沒有數值參數，改由 sbuf 代表，見第 2 點）；TP1 50% 與 1.5R 後備、保本 1R、ATR 追蹤啟動門檻 0、ATR 週期 14、Donchian 停損 buffer 2 ATR、波動帶 [0.001, 0.03]；開關類（`htf_4h`、`exclude_tradfi`、`require_close_beyond`）；限價 `signal_close` 的價位（offset 0 的 ±20% 仍是 0，只測 `limn`）；成本參數。纏論停損 buffer 0.15 不再列在這裡：第 2 點的組與 fallback 候選要測它，其他組不測。
+
+**測試更新**（`research/tests/test_phase1.py`）：
+
+- `test_p6_neighbor_table`：原本「cur/rat/opp → 無鄰居」改成「cur/rat/opp（15m、1h）→ sbuf 0.12、0.18」。另加：fx2 → 只有 fixr 1.6、2.4（沒有 sbuf）；lc（基底 cur）→ 只有 limn 3、5；S3 no4h（B2 = cur 市價列）→ sbuf；S3 ms13a（B2 = cur）→ 只有 msa；sbuf 鄰居 YAML 的 `stop.buffer_atr` 正好是 0.12、0.18。其他原斷言保留。
+- `test_p7_quarters_and_gate_a`：「無可測鄰居 → 鄰居條件成立且標記」改成「缺鄰居結果 → 第 6 條不成立並標記」。其他原斷言保留。
+
+### 8.3 跨過 2025-07-01 的交易：照 D34，不改
+
+原文：
+
+> **3. 跨過 2025-07-01 的單算樣本內，另外報筆數和拿掉後的淨 R：同意。**
+
+規格：照 D34 與 §3.1、§3.8、§5.5，沒有新規則。
+
+- 樣本內訊號的交易，持有到 2025-07-01 之後照算樣本內，不截斷。
+- 每組報 `n_cross`（§3.8）。
+- final 的穩健性檢查列出去掉這些交易後的 v2 淨 R（§5.5）。
+
+### 8.4 S1 沒有組晉級時：限價進場 fallback（取代 D40）
+
+原文：
+
+> S1 沒有任何一組通過時，S2 仍然要跑，條件是：取「每幣最多一筆版」裡毛 R ≥ +0.05、而且停損緩衝鄰居同號的組，最多 2 組，只測限價進場。沒有組達到毛 R +0.05，階段 1 才結束。
+
+> 要求毛 R ≥ +0.05，是因為限價最多只能省下大約這個量級的成本，毛 R 更低的組不可能靠限價轉正。
+
+規格（D46、D47）：
+
+1. **觸發**：驗收者依 §3.9 判定 S1 的正常晉級（P1–P3）是 0 組。正常晉級有 1 組以上，就不用 fallback，也不拿 fallback 補第 2 個名額。
+2. **候選池**：S1 參加排名的纏論主實驗，也就是 15m 與 1h 的 14 組。4h 七組是參考列（§8.5）；Donchian、JEV 參考列照舊不參加。
+3. **條件**（全部用 v2、樣本內、原始浮點數比較）：
+   - F1：`mean(gross_r) >= 0.05`。gross_r 已含滑價，不含手續費與資金費（§3.5）。
+   - F2：這組的 sbuf 0.12 與 0.18 兩個鄰居，v2 `mean(gross_r) > 0`。「同號」指和這組在同一個量（毛 R；F1 已要求它 > 0）上同號。
+   - 所有 F1 組都要測 sbuf，包括 fx/at 這種有其他參數的組。它們原本的 fixr/atrm 鄰居在 fallback 裡不看。
+   - 不再看 P1–P3（就是因為都不符合才走到這裡），也不看 net_slip3。
+4. **S1 執行者要預先跑好**：S1 的 `neighbors` 步驟除了 D24 的觸發，另外對候選池中 v2 `gross_r >= 0.05` 的每一組都跑 sbuf 0.12 與 0.18（不論 P1、P2；core_sha 相同就沿用）。這樣驗收者寫 promote 檔時不用回頭補跑。`neighbors S1 --status` 要把這些也算進「應有」。
+5. **選組**：符合 F1 與 F2 的組，依 v2 `mean(net_r)` 由高到低（同分取 v2 n 多的，再同分取名稱字典序），取最多 2 組。只有 1 組就照實取 1 組；0 組就照第 9 點結束。排序用淨 R，沿用原 prompt「取 S1 淨 R 最好的 2 組」；限價省下的成本大致相同，市價淨 R 較高的組比較接近轉正。
+6. **S2（fallback）只測限價進場**：
+   - 每個 fallback 基底 B 只產生 2 列新實驗：`p1s2_<b>_lc`、`p1s2_<b>_lm`（設定照 §4.2）。不產生 `cf1`。
+   - 市價列 B 只列在表上當對照，**不是 S2 候選**。它已經不符合 S1 的 P1–P3，結果也不會變。
+   - S2 候選 = 這些 lc、lm 列。晉級照 §3.9 的 P1–P3。鄰居照 §4.2：limn、limf，加上 B 的出場參數 fixr/atrm（若有）。lc、lm 有表內參數，不加 sbuf。
+   - fallback 的 S2 新實驗最多 4 個。
+7. S2 晉級 ≥ 1 組 → S3 照 §4.3 跑，基底就是這些 lc/lm 列。S2 晉級 0 組 → 在 S2「無候選」，進 final。
+8. **晉級檔 `/workspace/cc/ph1.promote.S1.md`**（驗收者寫，格式見 §8.9）：
+   - `PROMOTE_COUNT` 要**包含 fallback 晉級的組數**，並在同一行註明是 fallback。
+   - **只有連 fallback 都沒有組時，才寫 `PROMOTE_COUNT: 0`**。
+   - 管線用 `grep -o 'PROMOTE_COUNT: *[0-9]*' … | tail -1` 讀數字，所以 `PROMOTE_COUNT` 這個字串在檔案裡只能出現一次（理由段不要再寫這個字），數字要緊接在冒號和空格後面。
+9. **階段 1 在 S1 結束的條件**：正常晉級 0 組，而且 fallback 也 0 組（沒有組達到毛 R +0.05，或達到的組 sbuf 鄰居毛 R 不是全正）。這時 promote.S1 寫 `PROMOTED: none`、`MODE: none`、`PROMOTE_COUNT: 0`。
+10. **final 的研究停損判讀**（取代 D40 與 §5.5 對應句）：
+    - 在 S1 結束：寫明「S1 無組符合晉級條件；限價 fallback 也無組符合」。列出每個 F1 組和它兩個 sbuf 鄰居的 v2 毛 R；沒有 F1 組就寫「沒有任何一組 v2 毛 R ≥ +0.05」。再寫「限價進場沒有實際模擬；依使用者裁示，毛 R 低於 +0.05 的組不可能靠限價轉正」。照實列出 Donchian 的關卡 A 結果，交使用者判斷。
+    - 走 fallback 後在 S2 或 S3 結束：寫明「限價進場只在 fallback 組上測過（列名稱）；確認進場（cf1）沒有測」。
+    - 正常路徑：照 §5.5。
+11. manifest：S2 的每列加 `"fallback": true|false`。`gen S2` 依 promote 檔的 `MODE:` 行決定產生哪些列（§8.8 第 4 點）。
+
+### 8.5 4h 七組：只當參考資訊，分配不變
+
+原文：
+
+> **4h 湊不到 500 筆：同意不放寬門檻。** 那 7 組 4h 就當參考資訊，不用改分配。
+
+規格（D48）：
+
+1. `p1s1_4h_cur`、`_rat`、`_fx2`、`_fx3`、`_at2`、`_at3`、`_opp` 照 §4.1 跑，仍是 S1 的 24 組之一，名額不變。每張表照樣列出，標「參考（4h）」。§4.1 表 #15–21 的「參加排名」改為「否（參考：4h，§8.5）」；manifest 寫 `ranked: false`。
+2. 不參加 S1 晉級，也不在 §8.4 的 fallback 候選池；不觸發鄰居（同 JEV 參考列）。
+3. 關卡 A 的門檻不改（筆數 ≥ 500 照舊）。4h 組不會走到 S3，所以不判關卡 A。表上照樣列 v2 筆數，讓使用者看到差多少。
+4. §3.12：週期槓桿的主值改成 `net(1h,e) − net(15m,e)`，另列一欄「4h − 15m（參考）」。「改善最多的槓桿」只用主值比較。最佳纏論組（§3.12 最後一點、開頭第 2 行）從參加排名的組裡取，不含 4h；另列一行「4h 最佳（參考）」。
+5. Donchian 4h n55 不受影響：照舊是基準，照舊單獨檢查關卡 A（D18）。
+6. 測試：`test_p5_gen_s1_matches_plan` 的期望表把 4h 七組的 ranked 改成 false。
+
+### 8.6 階段 2：主結果排除 25 個傳統金融永續
+
+原文：
+
+> **傳統金融永續：現在就定，階段 2 主結果排除它們。** 它們在樣本內從沒進過前 20 名，但 2026 年的樣本外裡有（XAU、XAG、CL 等都出現過）。沒在樣本內測過的東西，不該算進樣本外的判定。
+> - 階段 2 的主結果：排除這 25 個幣。
+> - 包含它們的版本：另列一行，只當參考資訊。
+> 這條現在先寫進 phase1.md，不要等看到樣本外結果再決定。
+
+規格（D49；本階段不寫任何樣本外程式，只把規則記下來給階段 2）：
+
+1. 名單 = `common.TRADFI_BASES`（D15 的 25 個），以 `symbol.split("/")[0]` 比對。
+2. 階段 2 的關卡 B 判定（淨 R、PF、筆數、季度，全部 v2）只用 base 不在名單內的交易。另列一行「含傳統金融永續（參考）」，用全部交易，不參加判定。
+3. 做法：把同一次樣本外執行的結果事後拆成兩版，不另跑實驗，所以不違反「樣本外只跑一次」。in_top20 用的是固定的每日榜單、v2 每個幣分開算，所以事後去掉這些幣，結果等於設定 `exclude_tradfi: true`。受檢組本身若已經是 `exclude_tradfi: true`，兩版相同，照實註明。
+4. 階段 1 不受影響（樣本內這些幣從沒進過前 20 名，§1）。D15 末句「要不要在階段 2 排除它們…留給使用者決定」已由這條決定。final 的註記改寫成這條規則。
+
+### 8.7 資金費率缺 2026-10：先下載，抓不到就照規則補
+
+原文：
+
+> **資金費率只到 2026-09：會影響階段 2。** 階段 1 用不到，但樣本外一路到 2026-10-27，最後近兩個月沒有資金費率資料。依序處理：
+> 1. 現在已經 11 月初，先試著從 Binance vision 下載 2026-10 的月檔或日檔。
+> 2. 抓不到的話，用規則補：缺資料的月份，每筆單用該幣前 3 個月資金費率絕對值的中位數當成本（只扣，不加）。另外報受影響的筆數。
+
+**時機**：在 §8.8 的 S1 前補件做（建議）；最晚在階段 2 開始前完成。這條只動資料快取和資金費計算；樣本內月份都有資料時，樣本內結果不變（§8.8 的 A 表要證明）。
+
+規格（D50、D51）：
+
+**A. 下載（新命令 `.venv/bin/python -m research.augment fetch-funding`）**
+
+1. 目標：聯集幣（和 `build_funding` 同一份）的每個 (幣, 月份 M)，M ∈ 2025-07 … 2026-10，條件是該幣在 M 有任何 15m K，而且本機 `data/futures/um/monthly/fundingRate/<SYM>/<SYM>-fundingRate-<YYYY-MM>.csv` 不存在。預期幾乎都是 2026-10。
+2. 月檔：`https://data.binance.vision/data/futures/um/monthly/fundingRate/<SYM>/<SYM>-fundingRate-<YYYY-MM>.zip`，以及同名的 `.zip.CHECKSUM`。
+3. 日檔：先用 `https://data.binance.vision/data/futures/um/daily/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-10-01.zip` 探測一次。404 就整個跳過日檔（log 記 `# daily not available`）。可用時，對月檔 404 的 (幣, M)，逐日抓 M 的第 1 天到「該幣在 M 的最後一根 15m K 那天」。**全部日子都抓到才算這個月有資料**；缺任何一天，整個月走 B 的補值（只做月份層級，不做日層級拼接），log 記缺幾天。
+4. 下載檔是不受信任的資料：
+   - 放在新的空目錄 `research/cache/vision_dl/`（`monthly/<SYM>/`、`daily/<SYM>/`）。
+   - 只用標準庫 `urllib.request`（timeout 30 秒、最多重試 2 次、依序或最多 4 個並行、User-Agent 寫 `ChanEdge-research`，不帶任何個人資訊）和 `zipfile`。
+   - 驗證：zip 的 sha256 = CHECKSUM 檔第一欄；zip 只有一個成員，檔名正好是 `<SYM>-fundingRate-<YYYY-MM>.csv`（日檔是 `-<YYYY-MM-DD>.csv`），不含路徑；pandas 讀出的欄位正好是 `calc_time, funding_interval_hours, last_funding_rate`；所有 calc_time 都在該月（日）內。任一項不符就當作沒抓到，log 記原因。
+   - 不執行、不 import 任何下載內容。**不寫入 `data/`**：`data` 是指向 `/workspace/ChanEdge/data` 的連結，主工作樹也在用，保持原樣。
+5. log：`research/cache/logs/funding_fetch.log`。每 (幣, 月) 一行 `<SYM> <M> local|dl_monthly|dl_daily|missing <原因>`，最後一行 `# done dl_monthly=<n> dl_daily=<n> missing=<n>`。網路完全不通也不算失敗：全部記 missing，走 B。
+
+**B. 合併與補值（`.venv/bin/python -m research.augment build --only funding`）**
+
+1. 來源依序：`data/` 的 CSV（local）→ `vision_dl` 的月檔（dl_monthly）→ 日檔（dl_daily）。同一 (幣, 月) 只取第一個有的來源。`funding_months.parquet` 加欄 `source`（local / dl_monthly / dl_daily / imputed）與 `basis`（只有 imputed 列有值：own / market）。
+2. 範圍：該幣第一根到最後一根 15m K 之間、沒有任何來源的月份，樣本內外都算。這些 (幣, M) 照下面補：
+   - 補值費率 `imp = median(|rate|)`，取該幣在 M 之前 3 個日曆月（M−3、M−2、M−1，以 funding_time 判定）內的**真實**事件，不含補出來的事件。`basis = own`。
+   - 這 3 個月都沒有真實事件（例如 M 才上市）：改用同一個窗內**所有聯集幣**真實事件的 `median(|rate|)`，`basis = market`，另外報這種月份數與受影響筆數。
+   - 補值事件的時間：`F = M 的 00:00 UTC + k × h 小時`（k = 0, 1, …），F 早於下個月 00:00，而且 F ≤ 該幣最後一根 15m 的 close_time。h = 該幣在 M 之前最後一筆真實事件的 `funding_interval_hours`；沒有就用 8。
+   - 寫進 `funding.parquet`：`rate = imp`、`interval_h = h`，新欄 `imputed = True`（真實事件是 False）。
+3. 模擬器（`sim.funding_for_trade`）：真實事件照 §3.5（`w × side × rate × mark / R`）。**補值事件一律算成本**：`w × imp × mark / R`，不乘 side，多空都扣，永遠 ≥ 0（「只扣，不加」）。計入邊界、權重、mark 價照 §3.5。
+4. 每筆欄位：
+   - `funding_missing`：持倉區間 `(entry_time, exit_time]` 經過任何 source 為 imputed（或完全沒有資料）的月份 → True。意思從「有缺漏、當 0」改成「受影響、用了補值」。
+   - 新欄 `n_funding_imputed`：計入的補值事件數。
+5. 報告：每組 v2 與獨立版都報「受影響筆數」，也就是 `funding_missing` 為 True 的筆數（§3.8 的 `n_funding_missing`），另報其中 basis = market 的筆數。`augment.log` 末尾報各 source 的 (幣, 月) 數。
+6. 測試（`research/tests/test_funding.py`，合成資料，不連網）：
+   - `test_f8_imputed_events_cost_only`：補值事件讓多單、空單的 funding_r 都 > 0；真實事件照舊依 side 有正有負。
+   - `test_f9_impute_prior3_median_and_schedule`：07–09 月有真實費率、10 月缺 → imp = 07–09 月 |rate| 的中位數；事件時間依最後一筆真實事件的 interval_h（4h 與 8h 各一例）；3 個月都沒有 → 用全市場中位數並記 basis = market；補值不會拿補值來算。
+   - `test_f10_fetch_validation`：用本機合成的 zip 測 `fetch-funding` 的驗證函式：CHECKSUM 不符、成員名不符、含路徑、欄位不符、calc_time 不在該月 → 全部拒收。
+   - 既有的 `test_f6_missing_month_flag` 保留（意思照第 4 點）。
+
+### 8.8 執行者：S1 開跑前補件（不跑任何正式實驗）
+
+prep 開工時本節還不存在，所以本節不是 prep 的通過條件。**S1 階段的第一件事是把本節做完**（prep 已經做了的部分只要驗證），全部通過、commit 之後，才開始 §5.2 的第 1 步。在 registry 出現第一個 p1 實驗以前做的修改，不受 §5.0「開跑後改 sim 要先寫 issue」限制。
+
+1. `sim.py`：§8.1 的 `slip_r`；§8.7 B 第 3、4 點的補值事件與欄位。
+2. `augment.py`：§8.7 A（`fetch-funding`）與 B（來源合併、補值、`source`/`basis`/`imputed` 欄）。然後依序執行 `fetch-funding`、`augment build --only funding`。
+3. `metrics.py`：
+   - `summarize` 加 `net_slip3`、受影響筆數（含 basis = market 的筆數）。
+   - P3 與關卡 A 第 6 條刪掉「無可測鄰居」分支（§8.2 第 3 點）。
+   - 新增 `fallback_s1(...)`：回傳 §8.4 第 3、5 點的機械判定（候選池、F1、F2、排序、前 2 組）。
+4. `phase1.py`：
+   - 鄰居表照 §8.2；S1 的鄰居觸發另加 §8.4 第 4 點；`neighbors --status` 跟著算。
+   - `gen S1`：4h 七組 `ranked: false`（只改 manifest，YAML 內容不變）。
+   - `gen S2`：讀 promote 檔的 `MODE:` 行。`normal` → 每個基底 lc、lm、cf1；`fallback` → 每個基底只有 lc、lm，manifest 標 `fallback: true`，市價列標「對照，非候選」；缺 `MODE:` 行或值不是 normal / fallback → 報錯（執行者寫 issue）。
+   - `table`：v2 與獨立版主表加「滑價×3 淨 R（參考）」欄；4h 列標「參考（4h）」；(h) 的 P1/P2/P3 機械判定不再有「無可測」；S1 表另加 (k)「fallback 機械判定（只在正常晉級 0 組時使用；以驗收者 promote 檔為準）」：候選池 14 組各自的 v2 毛 R、F1、兩個 sbuf 鄰居的 v2 毛 R、F2、排序。
+   - `gatea`：加「滑價×3 淨 R（參考，不是關卡）」欄；鄰居條件不再有「無可測」。
+   - `final`：§8.4 第 10 點、§8.5 第 4 點、§8.6 第 4 點、§8.7 的報告文字；開頭第 2 行的鄰居欄只剩「全正｜有負」。
+5. 測試：§8.1 第 6 點、§8.2 的測試更新、§8.5 第 6 點、§8.7 B 第 6 點。另加：
+   - `test_phase1.py::test_p9_promote_mode_parsing`：normal / fallback / 缺行 / 錯值；fallback 只產生 lc、lm。
+   - `test_phase1.py::test_p10_fallback_s1`：F1 邊界用原始浮點數（0.0499999 不過、0.05 過）；F2 要兩個 sbuf 都 > 0；同分排序規則；最多 2 組；候選池不含 4h、Donchian、JEV 參考列。
+6. commit：`Phase 1 prep: user amendments (slip x3, stop-buffer neighbours, limit fallback, 4h reference, funding fill)`。
+
+**補件驗收**（執行者自查；S1 驗收者全部重跑）：
+
+| # | 指令 | 通過條件 |
+| --- | --- | --- |
+| A1 | `.venv/bin/python -m unittest discover -s research/tests -t . -v` | 全部 OK、無 skip；本節列的每個新測試名都出現在輸出中 |
+| A2 | `.venv/bin/python -m pytest -q` | 全過 |
+| A3 | `.venv/bin/python -m research.run research/experiments/p0_validate_current_15m.yaml --check` 與 `… p0_perf_15m_all.yaml --check` | 都是 `CHECK OK`，退出碼 0 |
+| A4 | `.venv/bin/python -m research.phase1 gen S1 --verify` | 24 組符合 §4.1，4h 七組 ranked = false |
+| A5 | `tail -1 research/cache/logs/funding_fetch.log`；`tail -3 research/cache/logs/augment.log` | 都有 `# done`；各 source 的 (幣, 月) 數寫進報告 |
+| A6 | 讀 `research/cache/funding_months.parquet`：2024-01 … 2025-07 中 source = imputed 的 (幣, 月) | 數目寫進報告。預期 0；> 0 就列出幣與月（照 §8.7 補值，不算失敗） |
+| A7 | `git diff 60ccc53 -- research/out/registry.md`；`test ! -s research/out/oos_log.md && echo empty` | 無輸出；`empty` |
+| A8 | `.venv/bin/python -m research.phase1 audit` | OK：主實驗 2、鄰居 0 |
+| A9 | `find data/futures/um/monthly/fundingRate -newer research/plans/phase1_decisions.md -type f \| wc -l`；`git status --porcelain`；`git ls-files research/cache \| wc -l` | 0；乾淨；0 |
+
+### 8.9 給驗收者（Opus）：S1 晉級檔與各輪補充
+
+1. S1：先照 §3.9 判定正常晉級（候選池 = 15m 與 1h 的 14 組；P3 用 §8.2 的鄰居）。
+   - ≥ 1 組 → `MODE: normal`。
+   - 0 組 → 自己用 v2 重算 §8.4 第 3、5 點（F1、F2、排序）。有符合的 → `MODE: fallback`。
+   - 也沒有 → `MODE: none`、`PROMOTE_COUNT: 0`。
+2. `/workspace/cc/ph1.promote.S1.md` 的三種寫法（取代 §6 的 S1 格式；`PROMOTE_COUNT` 這個字串全檔只出現一次，理由段不要再寫它）：
+
+   正常：
+
+   ```text
+   # S1 晉級（驗收者判定）
+   PROMOTED: p1s1_<a>, p1s1_<b>
+   MODE: normal
+   PROMOTE_COUNT: 2
+   理由：每個候選的 v2 淨 R、手續費×1.5 淨 R、各鄰居淨 R；被排除者的原因（不符 P1/P2/P3 或名次）。
+   ```
+
+   fallback：
+
+   ```text
+   # S1 晉級（驗收者判定）
+   PROMOTED: p1s1_<a>
+   MODE: fallback
+   PROMOTE_COUNT: 1（fallback 晉級 1 組：S1 無組符合 P1–P3，依 phase1.md §8.4 只測限價進場）
+   理由：正常晉級為 0 的原因；候選池 14 組各自的 v2 毛 R、F1、兩個 sbuf 鄰居的 v2 毛 R、F2、排序。
+   ```
+
+   連 fallback 都沒有：
+
+   ```text
+   # S1 晉級（驗收者判定）
+   PROMOTED: none
+   MODE: none
+   PROMOTE_COUNT: 0
+   理由：正常晉級為 0 的原因；fallback 為 0 的原因（列出 F1 組與 sbuf 鄰居毛 R，或寫沒有任何一組 v2 毛 R ≥ +0.05）。
+   ```
+
+3. S2 驗收（走 fallback 時）：確認只產生了 lc、lm（沒有 cf1），市價列沒有被當成候選；S2 晉級照 §3.9。S2 的 promote 檔照 §6 的格式，不需要 `MODE:` 行。
+4. 每輪驗收另查：主表與 gatea 表有滑價×3 欄；4h 列標參考、沒有進晉級或 fallback；鄰居完整（含 sbuf）且 `neighbors <輪> --status` 缺少數 = 0；沒有「無可測鄰居」字樣。
+5. S1 驗收另外把 §8.8 的 A1–A9 全部重跑。
+
+### 8.10 名額核算（不寫 QUESTION 的依據）
+
+| 路徑 | 階段 0 | S1 | S2 | S3 | 備用 | 合計 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 正常 | 2 | 24 | ≤ 6 | ≤ 16 | 10 | ≤ 58 |
+| fallback | 2 | 24 | ≤ 4 | ≤ 16 | 10 | ≤ 56 |
+
+- 兩條路徑互斥（fallback 只在 S1 正常晉級 0 組時走）。
+- sbuf 與其他鄰居不算進 60（§8.2 第 6 點）。滑價×3、資金費補值、傳統金融拆兩版都不是實驗。
+- 都 ≤ 60，所以不寫 `/workspace/cc/ph1.QUESTION.md`。
+
+### 8.11 被取代或補充的既有敘述（索引）
+
+| 位置 | 原敘述 | 現在 |
+| --- | --- | --- |
+| §0.6 鄰居列、§3.9 P3、D30 末句 | 沒有表內參數 → 「無可測鄰居」，算成立 | 取消；用 sbuf 鄰居，缺結果算不成立（§8.2） |
+| §3.10 對照表與「不測鄰居的參數」段 | 沒有 sbuf；纏論停損 buffer 不測 | §8.2 的更新版 |
+| §4.1 表 #1、2、7、8、9、14 的「表內鄰居」 | 無 | sbuf 0.12、0.18（§8.2） |
+| §4.1 表 #15–21 的「參加排名」與「表內鄰居」 | 是；cur/rat/opp 無、其他有 | 否（參考：4h），不跑鄰居（§8.5） |
+| §3.9「不參加晉級」、D12 | Donchian 與 JEV 參考列 | 再加 4h 七組（§8.5） |
+| §3.9 鄰居觸發、§5.2 第 4 步、D24 | 符合 P1 且 P2 才跑 | 另加 F1 組的 sbuf（§8.4 第 4 點） |
+| §3.9「推論…只會在 S1 或 S3」、§3.9「無候選」、D31 末句 | S2 不會是 0 組；S1 無候選就結束 | S1 先看 fallback；fallback 時 S2 也可能無候選（§8.4） |
+| §4.2、D14 | 每個基底 3 列新實驗，市價列是候選 | fallback 時只有 lc、lm，市價列不是候選（§8.4 第 6 點） |
+| §5.3 第 1 步、§6 晉級檔格式、D32 | `PROMOTED`、`PROMOTE_COUNT` | S1 加 `MODE:`；`PROMOTE_COUNT` 含 fallback（§8.4 第 8 點、§8.9） |
+| §5.5 研究停損判讀、D40 | S1 結束就寫「限價進場沒有測到」 | §8.4 第 10 點 |
+| §3.5 末點、§5.5 註記、D27 末句 | 2026-10 資金費本階段不處理 | §8.7 |
+| §3.8 指標、§5.2 第 7 步、§5.5 S1 表 | — | 加 net_slip3（參考）與資金費受影響筆數（§8.1、§8.7） |
+| §3.12、§5.5 開頭第 2 行、D39 | 週期含 4h；鄰居欄可寫「無可測」 | 週期主值只用 1h、4h 另列參考；鄰居欄只剩「全正｜有負」（§8.5、§8.2） |
+| §5.5 註記、D15 末句 | 階段 2 要不要排除傳統金融留給使用者 | 已定：主結果排除（§8.6） |
+| §5.1 `test_p5`、`test_p6`、`test_p7` | — | 照 §8.5 第 6 點、§8.2 測試更新 |
