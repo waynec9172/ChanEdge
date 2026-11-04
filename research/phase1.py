@@ -237,6 +237,8 @@ def _emit(specs: list[dict], seen: dict[str, str], directory: Path) -> list[dict
     for s in specs:
         sha = core_of(s["yaml"])
         reuse = seen.get(sha)
+        if reuse == s["name"]:
+            reuse = None  # its own YAML already on disk (re-running gen) is not a reuse
         if s.get("existing"):
             reuse = None
         elif reuse is None:

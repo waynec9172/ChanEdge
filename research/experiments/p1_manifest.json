@@ -7,7 +7,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_15m_cur",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -17,7 +17,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_15m_rat",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -27,7 +27,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_15m_fx2",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -37,7 +37,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_15m_fx3",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -47,7 +47,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_15m_at2",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -57,7 +57,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_15m_at3",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -67,7 +67,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_15m_opp",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -77,7 +77,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_1h_cur",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -87,7 +87,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_1h_rat",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -97,7 +97,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_1h_fx2",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -107,7 +107,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_1h_fx3",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -117,7 +117,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_1h_at2",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -127,7 +127,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_1h_at3",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -137,7 +137,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": "p1s1_1h_opp",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -147,7 +147,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": false,
-      "reuse_of": "p1s1_4h_cur",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -157,7 +157,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": false,
-      "reuse_of": "p1s1_4h_rat",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -167,7 +167,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": false,
-      "reuse_of": "p1s1_4h_fx2",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -177,7 +177,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": false,
-      "reuse_of": "p1s1_4h_fx3",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -187,7 +187,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": false,
-      "reuse_of": "p1s1_4h_at2",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -197,7 +197,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": false,
-      "reuse_of": "p1s1_4h_at3",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -207,7 +207,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": false,
-      "reuse_of": "p1s1_4h_opp",
+      "reuse_of": null,
       "existing": false
     },
     {
@@ -237,7 +237,7 @@
       "entry": "market",
       "filter": "hard+jev0.62",
       "ranked": false,
-      "reuse_of": "p1s1_15m_cur_jevref",
+      "reuse_of": null,
       "existing": false
     }
   ],
