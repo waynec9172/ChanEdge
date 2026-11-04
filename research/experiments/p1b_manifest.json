@@ -101,6 +101,33 @@
       "control": "p1b_base_4h_n55"
     }
   ],
-  "neighbors": {},
+  "neighbors": {
+    "p1b_tr_4h_n20": [
+      {
+        "param": "dcn",
+        "value": 16,
+        "experiment": "p1b_tr_4h_n20__nb_dcn_16",
+        "reuse_of": null
+      },
+      {
+        "param": "dcn",
+        "value": 24,
+        "experiment": "p1b_tr_4h_n20__nb_dcn_24",
+        "reuse_of": null
+      },
+      {
+        "param": "stop",
+        "value": 1.6,
+        "experiment": "p1b_tr_4h_n20__nb_stop_1p6",
+        "reuse_of": null
+      },
+      {
+        "param": "stop",
+        "value": 2.4,
+        "experiment": "p1b_tr_4h_n20__nb_stop_2p4",
+        "reuse_of": null
+      }
+    ]
+  },
   "skipped": []
 }

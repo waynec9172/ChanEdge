@@ -1,0 +1,40 @@
+{
+  "name": "p1b_tr_4h_n20__nb_stop_2p4",
+  "description": "NEIGHBOR of p1b_tr_4h_n20: stop.buffer_atr=2.4",
+  "signals": {
+    "source": "donchian",
+    "tf": "4h",
+    "types": [
+      "dc20_long",
+      "dc20_short"
+    ],
+    "donchian_n": 20
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "delist_rule": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 2.4,
+    "round_to_tick": true
+  },
+  "exit": {
+    "donchian_exit": {
+      "enabled": true,
+      "n": 10
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}
