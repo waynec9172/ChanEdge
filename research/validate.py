@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 
 import numpy as np
@@ -86,6 +85,8 @@ def main(argv=None) -> int:
     meta = json.loads((C.CACHE / "results" / f"{a.experiment}.json").read_text())
     base = load_baseline()
     n_base = len(base)
+    if "net_r_ex_funding" in res.columns:  # phase 1 results: baseline r_multiple has no funding, compare without it
+        res = res.assign(net_r=res["net_r_ex_funding"])
     sim = res.rename(columns={"exit_reason": "sim_exit", "exit_time": "sim_exit_time"})
     m = base.merge(
         sim[["symbol", "type", "entry_time", "net_r", "gross_r", "fee_r", "sim_exit", "tp1_hit", "sim_exit_time"]],
@@ -161,26 +162,7 @@ def main(argv=None) -> int:
         "出場用同 N 的反向突破，另加 2 ATR 停損。這是規劃者的解讀。phase 0 不執行這些實驗，只提交 YAML。",
         "",
     ]
-    bl = C.CACHE / "logs" / "signals_build.log"
-    lines += ["## 各步驟耗時", ""]
-    if bl.exists():
-        done = [ln for ln in bl.read_text().splitlines() if ln.startswith("# done")]
-        if done:
-            lines.append(f"- 全量訊號快取（signals build）：{done[-1]}")
-    lines.append(f"- 驗證實驗模擬（run.py，不含讀取外的其他步驟）：{meta['elapsed_s']} 秒")
-    perf = C.CACHE / "logs" / "perf.log"
-    perf_meta = C.CACHE / "results" / "p0_perf_15m_all.json"
-    if perf.exists() and perf_meta.exists():
-        txt = perf.read_text()
-        mt = re.search(r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\): (\S+)", txt)
-        pm = json.loads(perf_meta.read_text())
-        lines += [
-            "",
-            "## 效能（15m 全期、全幣池）",
-            "",
-            f"- `p0_perf_15m_all`：訊號 {pm['n_signals']}，成交 {pm['n_trades']}，run.py 內部耗時 {pm['elapsed_s']} 秒；"
-            f"`/usr/bin/time` Elapsed (wall clock) = {mt.group(1) if mt else '?'}（門檻 10:00）。",
-        ]
+    lines += ["## 效能與耗時", "", "效能與耗時紀錄見 research/out/harness_perf.md（由 research.perf 產生）。", ""]
     from pathlib import Path
 
     Path(a.out).write_text("\n".join(lines) + "\n")

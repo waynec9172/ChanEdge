@@ -2,7 +2,8 @@
 
 Commands:
   python -m research.signals compare                      # 3 coins x 3 months, single vs rolling
-  python -m research.signals build [--symbols A,B] [--workers N]
+  python -m research.signals build [--symbols A,B] [--workers N] [--out-dir DIR]
+  python -m research.signals estimate-retro               # append the full-build estimate to signals_build.log
 """
 
 from __future__ import annotations
@@ -558,16 +559,66 @@ def _build_job(args):
         return {"symbol": symbol, "error": f"{exc!r}\n{traceback.format_exc()}"}
 
 
-def build(symbols: list[str] | None, workers: int) -> int:
+def _bar_weight(symbol: str) -> int:
+    """Number of 15m bars inside the symbol's active range (the work a build job does scales with this)."""
+    import pyarrow.parquet as pq
+
+    got = _seg_time_range(symbol)
+    if got is None:
+        return 0
+    _segs, lo, hi = got
+    col = pq.read_table(C.bars_path(symbol, "15m"), columns=["open_time"]).to_pandas()["open_time"]
+    return int(((col >= pd.Timestamp(lo)) & (col < pd.Timestamp(hi))).sum())
+
+
+def estimate_total(done: list[tuple[str, float]], workers: int, symbols: list[str] | None = None) -> tuple[float, int]:
+    """est = (sum elapsed / sum w over finished symbols) * sum w over all symbols / workers. Returns (seconds, n_symbols)."""
+    allsyms = symbols or C.union_symbols()
+    w_done = sum(_bar_weight(s) for s, _ in done)
+    e_done = sum(e for _, e in done)
+    w_all = sum(_bar_weight(s) for s in allsyms)
+    return (e_done / w_done) * w_all / workers, len(allsyms)
+
+
+def estimate_retro() -> int:
+    """Append `# estimate-retro` to the existing full-build log, using the small-sample log (no rebuild)."""
+    import re
+
+    logs = C.CACHE / "logs"
+    small = (logs / "signals_build_small.log").read_text().splitlines()
+    done = []
+    for ln in small:
+        m = re.match(r"(\S+/USDT) sig15=\d+ sig1h=\d+ sig4h=\d+ elapsed=([\d.]+)s", ln)
+        if m:
+            done.append((m.group(1), float(m.group(2))))
+    est, n = estimate_total(done, 6)
+    line = f"# estimate-retro (from signals_build_small.log, {len(done)} symbols) full={n} symbols ~ {est:.0f} s at workers=6\n"
+    path = logs / "signals_build.log"
+    text = path.read_text()
+    if "# estimate-retro" in text:
+        print("already present")
+        return 0
+    with open(path, "a") as fh:
+        fh.write(line)
+    print(line.strip())
+    return 0
+
+
+def build(symbols: list[str] | None, workers: int, out_dir=None) -> int:
     mode_path = C.CACHE / "mode.json"
     if not mode_path.exists():
         print("mode.json is missing; run `python -m research.signals compare` first", file=sys.stderr)
         return 1
     modes = {tf: json.loads(mode_path.read_text())[tf] for tf in C.TFS}
-    logs = C.CACHE / "logs"
+    from pathlib import Path
+
+    out_dir = Path(out_dir) if out_dir else C.CACHE
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logs = out_dir / "logs" if out_dir != C.CACHE else C.CACHE / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     log_path = logs / "signals_build.log"
     names = symbols or C.union_symbols()
+    done_times: list[tuple[str, float]] = []
     parts: dict[str, list] = {k: [] for k in ("signals_15m", "signals_1h", "signals_4h", "bias_1h", "bias_4h", "bi_events_15m", "bars_15m")}
     instruments, failed = [], []
     t0 = time.time()
@@ -587,6 +638,7 @@ def build(symbols: list[str] | None, workers: int) -> int:
                 for k in parts:
                     parts[k].append(res[k])
                 instruments.append(res["instrument"])
+                done_times.append((res["symbol"], float(res["elapsed"])))
                 log.write(
                     f"{res['symbol']} sig15={len(res['signals_15m'])} sig1h={len(res['signals_1h'])} "
                     f"sig4h={len(res['signals_4h'])} elapsed={res['elapsed']:.1f}s total={time.time() - t0:.0f}s\n"
@@ -603,8 +655,11 @@ def build(symbols: list[str] | None, workers: int) -> int:
                 name = f"{k}.parquet"
             else:
                 name = f"{k}.parquet"
-            df.to_parquet(C.CACHE / name)
-        pd.DataFrame(instruments, columns=["symbol", "price_tick"]).to_parquet(C.CACHE / "instruments.parquet")
+            df.to_parquet(out_dir / name)
+        pd.DataFrame(instruments, columns=["symbol", "price_tick"]).to_parquet(out_dir / "instruments.parquet")
+        if symbols and done_times:
+            est, n_all = estimate_total(done_times, workers)
+            log.write(f"# estimate full={n_all} symbols ~ {est:.0f} s at workers={workers}\n")
         log.write(f"# done total={time.time() - t0:.0f}s failed={failed}\n")
     if failed:
         print("FAILED symbols:", ", ".join(failed), file=sys.stderr)
@@ -621,11 +676,15 @@ def main(argv=None) -> int:
     b = sub.add_parser("build")
     b.add_argument("--symbols", default=None)
     b.add_argument("--workers", type=int, default=6)
+    b.add_argument("--out-dir", default=None)
+    sub.add_parser("estimate-retro")
     a = p.parse_args(argv)
     if a.cmd == "compare":
         compare(a.workers)
         return 0
-    return build(a.symbols.split(",") if a.symbols else None, a.workers)
+    if a.cmd == "estimate-retro":
+        return estimate_retro()
+    return build(a.symbols.split(",") if a.symbols else None, a.workers, a.out_dir)
 
 
 if __name__ == "__main__":

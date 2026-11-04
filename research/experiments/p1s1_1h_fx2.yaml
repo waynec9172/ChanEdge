@@ -1,0 +1,43 @@
+{
+  "name": "p1s1_1h_fx2",
+  "description": "S1 1h fx2：硬閘門（4h 方向、波動帶），下一根開盤市價，固定 2R（maker 掛單）",
+  "signals": {
+    "source": "chan",
+    "tf": "1h",
+    "types": [
+      "second_buy",
+      "third_buy",
+      "second_sell",
+      "third_sell"
+    ],
+    "donchian_n": null
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "htf_4h": true,
+    "vol_band": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 0.15,
+    "round_to_tick": true
+  },
+  "exit": {
+    "fixed_r": {
+      "enabled": true,
+      "r": 2.0
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

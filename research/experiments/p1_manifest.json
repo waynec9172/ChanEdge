@@ -1,0 +1,248 @@
+{
+  "S1": [
+    {
+      "name": "p1s1_15m_cur",
+      "tf": "15m",
+      "exit": "cur",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_15m_rat",
+      "tf": "15m",
+      "exit": "rat",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_15m_fx2",
+      "tf": "15m",
+      "exit": "fx2",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_15m_fx3",
+      "tf": "15m",
+      "exit": "fx3",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_15m_at2",
+      "tf": "15m",
+      "exit": "at2",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_15m_at3",
+      "tf": "15m",
+      "exit": "at3",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_15m_opp",
+      "tf": "15m",
+      "exit": "opp",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_1h_cur",
+      "tf": "1h",
+      "exit": "cur",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_1h_rat",
+      "tf": "1h",
+      "exit": "rat",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_1h_fx2",
+      "tf": "1h",
+      "exit": "fx2",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_1h_fx3",
+      "tf": "1h",
+      "exit": "fx3",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_1h_at2",
+      "tf": "1h",
+      "exit": "at2",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_1h_at3",
+      "tf": "1h",
+      "exit": "at3",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_1h_opp",
+      "tf": "1h",
+      "exit": "opp",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_4h_cur",
+      "tf": "4h",
+      "exit": "cur",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_4h_rat",
+      "tf": "4h",
+      "exit": "rat",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_4h_fx2",
+      "tf": "4h",
+      "exit": "fx2",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_4h_fx3",
+      "tf": "4h",
+      "exit": "fx3",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_4h_at2",
+      "tf": "4h",
+      "exit": "at2",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_4h_at3",
+      "tf": "4h",
+      "exit": "at3",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "p1s1_4h_opp",
+      "tf": "4h",
+      "exit": "opp",
+      "entry": "market",
+      "filter": "hard",
+      "ranked": true,
+      "reuse_of": null,
+      "existing": false
+    },
+    {
+      "name": "donchian_1h_n20",
+      "tf": "1h",
+      "exit": "dc",
+      "entry": "market",
+      "filter": "top20",
+      "ranked": false,
+      "reuse_of": null,
+      "existing": true
+    },
+    {
+      "name": "donchian_4h_n55",
+      "tf": "4h",
+      "exit": "dc",
+      "entry": "market",
+      "filter": "top20",
+      "ranked": false,
+      "reuse_of": null,
+      "existing": true
+    },
+    {
+      "name": "p1s1_15m_cur_jevref",
+      "tf": "15m",
+      "exit": "cur",
+      "entry": "market",
+      "filter": "hard+jev0.62",
+      "ranked": false,
+      "reuse_of": null,
+      "existing": false
+    }
+  ],
+  "S2": [],
+  "S3": [],
+  "neighbors": {},
+  "skipped": []
+}

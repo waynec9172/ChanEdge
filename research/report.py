@@ -54,6 +54,7 @@ def metrics(df: pd.DataFrame) -> dict:
         "win_rate": float((df["net_r"] > 0).mean()),
         "pf": float(pos / neg) if neg > 0 else float("inf"),
         "sum_net_r": float(df["net_r"].sum()),
+        **({"mean_funding_r": float(df["funding_r"].mean())} if "funding_r" in df.columns else {}),
         "median_bars_held": float(df["bars_held"].median()),
         "mfe_q": q(df["mfe_r"]),
         "mae_q": q(df["mae_r"]),
@@ -65,6 +66,7 @@ def fmt(m: dict) -> str:
         return "n=0"
     return (
         f"n={m['n']} net={m['mean_net_r']:+.4f} gross={m['mean_gross_r']:+.4f} fee={m['mean_fee_r']:.4f} "
+        f"{'funding=%+.4f ' % m['mean_funding_r'] if 'mean_funding_r' in m else ''}"
         f"win={m['win_rate']:.3f} pf={m['pf']:.3f} sum={m['sum_net_r']:+.1f} med_bars={m['median_bars_held']:.0f} "
         f"mfe25/50/75={m['mfe_q'][0]:.2f}/{m['mfe_q'][1]:.2f}/{m['mfe_q'][2]:.2f} "
         f"mae25/50/75={m['mae_q'][0]:.2f}/{m['mae_q'][1]:.2f}/{m['mae_q'][2]:.2f}"

@@ -159,3 +159,41 @@ def instrument(symbol: str):
     from chanedge.app.paper_loop import _kline_text, inferred_instrument
 
     return inferred_instrument(settings(), symbol, _kline_text(ROOT, symbol))
+
+
+# --------------------------------------------------------------------------- phase 1 constants (plan section 3.1)
+IS_QUARTERS = ("2024Q1", "2024Q2", "2024Q3", "2024Q4", "2025Q1", "2025Q2")
+TRADFI_BASES = (
+    "XAU", "XAG", "XAUT", "PAXG", "CL", "BZ", "GOOGL", "INTC", "MRVL", "MSTR", "MU", "NVDA", "TSLA",
+    "SAMSUNG", "SKHY", "SKHYNIX", "SNDK", "SOXL", "SOXS", "CRCL", "EWY", "SPCX", "DRAM", "KORU", "SNXX",
+)
+MAJORS = ("BTC/USDT", "ETH/USDT")
+TF_US = {"15m": 900_000_000, "1h": 3_600_000_000, "4h": 14_400_000_000}
+BARS_PER_TF = {"15m": 1, "1h": 4, "4h": 16}
+CORE_MIN_DAYS = 274
+
+
+def quarter_of_series(signal_time: pd.Series) -> pd.Series:
+    """UTC quarter label such as '2024Q1'."""
+    t = signal_time.dt.tz_convert("UTC")
+    return t.dt.year.astype(str) + "Q" + t.dt.quarter.astype(str)
+
+
+@functools.lru_cache(maxsize=1)
+def core_symbols() -> tuple[str, ...]:
+    """In-sample (2024-01-01..2025-06-30) days in the top 20 >= 274, minus the majors."""
+    uni = load_universe()
+    d = uni[(uni["date"] >= IS_START) & (uni["date"] <= IS_END)]
+    assert d["date"].nunique() == 547, d["date"].nunique()
+    days = d.groupby("symbol")["date"].nunique()
+    return tuple(sorted(s for s, n in days.items() if n >= CORE_MIN_DAYS and s not in MAJORS))
+
+
+def symbol_group(symbol: str) -> str:
+    if symbol in MAJORS:
+        return "major"
+    if symbol.split("/")[0] in TRADFI_BASES:
+        return "tradfi"
+    if symbol in core_symbols():
+        return "core"
+    return "other"

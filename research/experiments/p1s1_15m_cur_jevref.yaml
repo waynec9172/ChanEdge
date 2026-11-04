@@ -1,0 +1,44 @@
+{
+  "name": "p1s1_15m_cur_jevref",
+  "description": "S1 參考列（不排名）：15m 現行近似，硬閘門 + JEV ≥ 0.62，下一根開盤市價",
+  "signals": {
+    "source": "chan",
+    "tf": "15m",
+    "types": [
+      "second_buy",
+      "third_buy",
+      "second_sell",
+      "third_sell"
+    ],
+    "donchian_n": null
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": 0.62,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "htf_4h": true,
+    "vol_band": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 0.15,
+    "round_to_tick": true
+  },
+  "exit": {
+    "preset": "current",
+    "opposite_signal": {
+      "enabled": true,
+      "tf": "15m"
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

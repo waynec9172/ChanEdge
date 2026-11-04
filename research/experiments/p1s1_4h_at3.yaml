@@ -1,0 +1,44 @@
+{
+  "name": "p1s1_4h_at3",
+  "description": "S1 4h at3：硬閘門（4h 方向、波動帶），下一根開盤市價，ATR 追蹤 3 ATR",
+  "signals": {
+    "source": "chan",
+    "tf": "4h",
+    "types": [
+      "second_buy",
+      "third_buy",
+      "second_sell",
+      "third_sell"
+    ],
+    "donchian_n": null
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "htf_4h": true,
+    "vol_band": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 0.15,
+    "round_to_tick": true
+  },
+  "exit": {
+    "atr_trail": {
+      "enabled": true,
+      "mult": 3.0,
+      "arm_r": 0.0
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

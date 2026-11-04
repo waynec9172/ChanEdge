@@ -1,4 +1,4 @@
-"""Benchmark strategy signals: Donchian close-breakouts on 1h / 4h, N in {20, 55}.
+"""Benchmark strategy signals: Donchian close-breakouts on 1h / 4h, N in {16, 20, 24, 44, 55, 66} (20 / 55 are the benchmarks, the rest are neighbours).
 
 Long signal at bar t: close[t] > max(high[t-N..t-1]) and close[t-1] <= max(high[t-N-1..t-2]).
 Short is symmetric on lows. Only the first breakout bar fires. Time = close_time of bar t.
@@ -15,7 +15,7 @@ import pandas as pd
 
 from research import common as C
 
-NS = (20, 55)
+NS = (16, 20, 24, 44, 55, 66)
 
 
 def wilder_atr_np(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -100,6 +100,9 @@ def signals_for(symbol: str, tf: str, rank_map: dict) -> pd.DataFrame:
 
 
 def build() -> None:
+    import time
+
+    t0 = time.time()
     uni = C.load_universe()
     rank_map = {(d, s): r for d, s, r in zip(uni["date"], uni["symbol"], uni["rank"])}
     C.CACHE.mkdir(parents=True, exist_ok=True)
@@ -110,6 +113,10 @@ def build() -> None:
         out["time"] = out["time"].astype("datetime64[us, UTC]")
         out.to_parquet(C.CACHE / f"signals_donchian_{tf}.parquet")
         print(tf, len(out))
+        with open(C.CACHE / "logs" / "donchian_build.log", "a") as fh:
+            fh.write(f"{tf} rows={len(out)} n={sorted(out['n'].unique().tolist())} total={time.time() - t0:.0f}s\n")
+    with open(C.CACHE / "logs" / "donchian_build.log", "a") as fh:
+        fh.write(f"# done total={time.time() - t0:.0f}s\n")
 
 
 if __name__ == "__main__":

@@ -55,6 +55,15 @@ _FILTER_DEFAULTS = {
     "max_cost_r": None,
     "exclude_reemit": False,
 }
+# phase 1 optional keys: absent == default == old behaviour; resolved() never prints a default value (keeps phase 0 shas)
+_FILTER_OPTIONAL = {
+    "htf_4h": False,
+    "vol_band": False,
+    "exclude_tradfi": False,
+    "min_stop_atr": None,
+    "min_stop_pct": None,
+}
+DONCHIAN_NS = (16, 20, 24, 44, 55, 66)
 
 
 class ConfigError(ValueError):
@@ -122,15 +131,22 @@ class SimConfig:
         else:
             if sig["tf"] == "15m":
                 raise ConfigError("donchian signals exist for 1h and 4h only")
-            if sig["donchian_n"] not in (20, 55):
-                raise ConfigError("signals.donchian_n must be 20 or 55")
+            if sig["donchian_n"] not in DONCHIAN_NS:
+                raise ConfigError(f"signals.donchian_n must be one of {DONCHIAN_NS}")
             n = sig["donchian_n"]
             if set(sig["types"]) - {f"dc{n}_long", f"dc{n}_short"} or not sig["types"]:
                 raise ConfigError(f"signals.types for donchian must be dc{n}_long / dc{n}_short")
         f = d["filters"]
-        _check_keys("filters", f, set(_FILTER_DEFAULTS))
-        for k in ("in_top20", "candidate_only", "gate_pass", "exclude_reemit"):
+        _check_keys("filters", f, set(_FILTER_DEFAULTS) | set(_FILTER_OPTIONAL), set(_FILTER_DEFAULTS))
+        f = {**_FILTER_OPTIONAL, **f}
+        for k in ("in_top20", "candidate_only", "gate_pass", "exclude_reemit", "htf_4h", "vol_band", "exclude_tradfi"):
             _expect("filters", k, f[k], "bool")
+        for k in ("min_stop_atr", "min_stop_pct"):
+            _expect("filters", k, f[k], "num?")
+            if f[k] is not None and not f[k] > 0:
+                raise ConfigError(f"filters.{k} must be > 0")
+        if sig["source"] != "chan" and (f["htf_4h"] or f["vol_band"]):
+            raise ConfigError("htf_4h / vol_band exist for chan signals only")
         _expect("filters", "jev_min", f["jev_min"], "num?")
         _expect("filters", "max_cost_r", f["max_cost_r"], "num?")
         if (sig["tf"] != "15m" or sig["source"] != "chan") and (f["candidate_only"] or f["gate_pass"] or f["jev_min"] is not None):
@@ -143,8 +159,8 @@ class SimConfig:
         if e["mode"] == "limit":
             lim = e.get("limit")
             _check_keys("entry.limit", lim, {"price", "offset", "valid_bars"})
-            if lim["price"] not in ("signal_close", "stop_frac"):
-                raise ConfigError("entry.limit.price must be signal_close or stop_frac")
+            if lim["price"] not in ("signal_close", "stop_frac", "defend_frac"):
+                raise ConfigError("entry.limit.price must be signal_close, stop_frac or defend_frac")
             _expect("entry.limit", "offset", lim["offset"], "num")
             _expect("entry.limit", "valid_bars", lim["valid_bars"], "int")
             if lim["valid_bars"] < 1:
@@ -179,11 +195,12 @@ class SimConfig:
         )
 
     def resolved(self) -> dict:
+        filters = {k: v for k, v in self.filters.items() if k not in _FILTER_OPTIONAL or v != _FILTER_OPTIONAL[k]}
         return {
             "name": self.name,
             "description": self.description,
             "signals": self.signals,
-            "filters": self.filters,
+            "filters": filters,
             "entry": self.entry,
             "stop": self.stop,
             "exit": self.exit,
@@ -235,9 +252,25 @@ class Market:
     bi_new: dict  # symbol -> (confirm_us, up_end array, down_end array) event arrays for 'new'
     ticks: dict
     tables: dict = field(default_factory=dict)
+    funding: dict | None = None  # symbol -> (funding_time_us array, rate array); None = funding not modelled
+    funding_months: dict | None = None  # symbol -> set of "YYYY-MM" that have a funding CSV
 
 
-def load_market() -> Market:
+def load_funding():
+    """(funding, funding_months) from the augment cache, or (None, None) when it has not been built."""
+    fp, mp = C.CACHE / "funding.parquet", C.CACHE / "funding_months.parquet"
+    if not (fp.exists() and mp.exists()):
+        return None, None
+    f = pd.read_parquet(fp).sort_values(["symbol", "funding_time"], kind="stable")
+    out = {}
+    for sym, g in f.groupby("symbol", sort=False):
+        out[sym] = (_us(g["funding_time"]), g["rate"].to_numpy(float))
+    m = pd.read_parquet(mp)
+    months = {sym: set(g["month"]) for sym, g in m.groupby("symbol", sort=False)}
+    return out, months
+
+
+def load_market(bi_tf: str = "15m") -> Market:
     cache = C.CACHE
     df = pd.read_parquet(cache / "bars_15m.parquet")
     df = df.sort_values(["symbol", "open_time"], kind="stable").reset_index(drop=True)
@@ -255,7 +288,7 @@ def load_market() -> Market:
         g = g.sort_values("close_time")
         b = g["bias"].to_numpy()
         bias[s] = (_us(g["close_time"]), np.isin(b, BIAS_DOWN), np.isin(b, BIAS_UP))
-    ev = pd.read_parquet(cache / "bi_events_15m.parquet")
+    ev = pd.read_parquet(cache / f"bi_events_{bi_tf}.parquet")
     ev = ev[ev["event"] == "new"].sort_values(["symbol", "confirm_time"], kind="stable")
     bi = {}
     for s, g in ev.groupby("symbol", sort=False):
@@ -265,19 +298,40 @@ def load_market() -> Market:
         bi[s] = (t, np.where(d == 1, e, np.nan), np.where(d == -1, e, np.nan))
     inst = pd.read_parquet(cache / "instruments.parquet")
     ticks = {s: (None if pd.isna(t) else float(t)) for s, t in zip(inst["symbol"], inst["price_tick"])}
-    return Market(bars, bias, bi, ticks)
+    fund, fmonths = load_funding()
+    return Market(bars, bias, bi, ticks, funding=fund, funding_months=fmonths)
 
 
-def load_signal_table(cfg: SimConfig, tf: str, source: str | None = None) -> pd.DataFrame:
+AUG_COLS = ("atr15_pct", "tp_up_end", "tp_down_end")
+
+
+def load_signal_table(cfg: SimConfig, tf: str, source: str | None = None, aug: bool = False) -> pd.DataFrame:
+    """Signal table; aug=True merges signals_{tf}_aug (atr15_pct, tp_up_end, tp_down_end) after asserting identical rows."""
     source = source or cfg.signals["source"]
     name = f"signals_{tf}.parquet" if source == "chan" else f"signals_donchian_{tf}.parquet"
-    return pd.read_parquet(C.CACHE / name)
+    df = pd.read_parquet(C.CACHE / name)
+    if aug and source == "chan":
+        ap = C.CACHE / f"signals_{tf}_aug.parquet"
+        needed = cfg.filters.get("vol_band") or (tf != "15m" and cfg.exit["tp1"]["enabled"])
+        if not ap.exists():
+            if needed:
+                raise FileNotFoundError(f"{ap.name} is required by this configuration (run research.augment build)")
+            return df
+        a = pd.read_parquet(ap)
+        if len(a) != len(df):
+            raise ValueError(f"{ap.name}: {len(a)} rows, expected {len(df)}")
+        for c in ("symbol", "type", "time"):
+            if not (a[c].to_numpy() == df[c].to_numpy()).all():
+                raise ValueError(f"{ap.name}: column {c} differs from {name}")
+        for c in AUG_COLS:
+            df[c] = a[c].to_numpy()
+    return df
 
 
 def select_signals(cfg: SimConfig, market: Market | None = None) -> pd.DataFrame:
     sg = cfg.signals
-    df = load_signal_table(cfg, sg["tf"])
     f = cfg.filters
+    df = load_signal_table(cfg, sg["tf"], aug=True)
     m = df["type"].isin(sg["types"])
     if sg["source"] == "donchian":
         m &= df["n"] == sg["donchian_n"]
@@ -291,9 +345,21 @@ def select_signals(cfg: SimConfig, market: Market | None = None) -> pd.DataFrame
         m &= df["jev_score"] >= f["jev_min"]
     if f["exclude_reemit"]:
         m &= ~df["reemit"].astype(bool)
+    if f["htf_4h"]:
+        b4 = df["bias_4h"]
+        m &= ((df["side"] == 1) & b4.isin(BIAS_UP)) | ((df["side"] == -1) & b4.isin(BIAS_DOWN))
+    if f["vol_band"]:
+        v = C.settings().volatility
+        assert (v.atr_pct_min, v.atr_pct_max) == (0.001, 0.03), v
+        a = df["atr15_pct"]
+        m &= (a >= v.atr_pct_min) & (a <= v.atr_pct_max)  # NaN compares False -> rejected
+    if f["exclude_tradfi"]:
+        m &= ~df["symbol"].str.split("/").str[0].isin(C.TRADFI_BASES)
     day = C.universe_dates(df["time"])
     m &= (day >= C.HISTORY_START) & (day <= C.HISTORY_END)
-    return df[m].sort_values(["symbol", "time"], kind="stable").reset_index(drop=True)
+    out = df[m].sort_values(["symbol", "time"], kind="stable").reset_index(drop=True)
+    out["attempt_id"] = np.arange(len(out), dtype="int64")
+    return out
 
 
 def opposite_times(cfg: SimConfig) -> dict:
@@ -329,7 +395,55 @@ def _floor_tick(price: float, tick: float, side: int) -> float:
     return float(q)
 
 
-def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bias, bi, opp: dict, tick):
+def _month_range(a_us: int, b_us: int):
+    a = pd.Timestamp(a_us, unit="us")
+    b = pd.Timestamp(b_us, unit="us")
+    y, m = a.year, a.month
+    while (y, m) <= (b.year, b.month):
+        yield f"{y:04d}-{m:02d}"
+        m += 1
+        if m == 13:
+            y, m = y + 1, 1
+
+
+def funding_for_trade(fund, fmonths, symbol, side, R, entry_us, exit_us, legs_ot, legs_w, ot, O, Cl):
+    """Funding cost in R for one trade. Events F with entry_us < F <= exit_us; weight = share of legs exiting at or after F.
+
+    mark = close of the 15m bar whose close_time == F, else open of the bar whose open_time == F, else the event is skipped.
+    Returns (funding_r, n_events_counted, missing_flag).
+    """
+    if fund is None:
+        return 0.0, 0, False
+    missing = False
+    months = fmonths.get(symbol, set()) if fmonths is not None else set()
+    for mo in _month_range(entry_us, exit_us):
+        if mo not in months:
+            missing = True
+            break
+    ft, fr = fund.get(symbol, (np.empty(0, dtype="int64"), np.empty(0)))
+    lo = int(np.searchsorted(ft, entry_us, side="right"))
+    hi = int(np.searchsorted(ft, exit_us, side="right"))
+    total = 0.0
+    cnt = 0
+    for k in range(lo, hi):
+        F = int(ft[k])
+        w = sum(wl for wl, tl in zip(legs_w, legs_ot) if tl >= F)
+        idx = bisect_left(ot, F - 900_000_000)
+        if idx < len(ot) and ot[idx] == F - 900_000_000:
+            mark = Cl[idx]
+        else:
+            idx = bisect_left(ot, F)
+            if idx < len(ot) and ot[idx] == F:
+                mark = O[idx]
+            else:
+                missing = True
+                continue
+        total += w * side * float(fr[k]) * mark
+        cnt += 1
+    return total / R, cnt, missing
+
+
+def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bias, bi, opp: dict, tick, funding=None, attempts_out=None):
     ex = cfg.exit
     costs = cfg.costs
     taker = costs["taker_bps"] / 1e4
@@ -338,7 +452,10 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
     buf_atr = cfg.stop["buffer_atr"]
     round_tick = cfg.stop["round_to_tick"]
     max_cost = cfg.filters["max_cost_r"]
+    ms_atr = cfg.filters.get("min_stop_atr")
+    ms_pct = cfg.filters.get("min_stop_pct")
     mode = cfg.entry["mode"]
+    fund, fmonths = funding if funding is not None else (None, None)
     n_bars = len(mk["ot"])
     ot = mk["ot"].tolist()
     O = mk["o"].tolist()
@@ -356,7 +473,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
         b_up = (bup[pos] & valid).tolist()
     else:
         b_down = b_up = [False] * n_bars
-    # aligned new bi endpoints
+    # aligned new bi endpoints (of the signal timeframe; the event is usable from the 15m bar closing at confirm_time)
     if ex["ratchet"]["enabled"] and bi is not None:
         et, eup, edn = bi
         idx = np.searchsorted(np.array(ct), et)  # bar whose close_time == event time
@@ -373,20 +490,33 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
     else:
         nup = ndn = None
     rows = []
-    cnt = {"signals": 0, "no_entry_bar": 0, "invalid_stop": 0, "tick_missing": 0, "cost_rejected": 0, "unfilled": 0, "confirm_abandoned": 0}
+    cnt = {
+        "signals": 0, "no_entry_bar": 0, "invalid_stop": 0, "tick_missing": 0, "cost_rejected": 0,
+        "unfilled": 0, "confirm_abandoned": 0, "minstop_rejected": 0,
+    }
     tp1C, beC, ratC, fixC, trC = ex["tp1"], ex["breakeven"], ex["ratchet"], ex["fixed_r"], ex["atr_trail"]
     oppC, biasC, lvlC, timeC = ex["opposite_signal"], ex["bias_1h"], ex["level_fail"], ex["time_stop"]
+    has_tp_cols = "tp_up_end" in sig.columns
     for r in sig.itertuples(index=False):
         cnt["signals"] += 1
         side = int(r.side)
         T_us = int(r.time.value // 1000) if hasattr(r.time, "value") else None
+        tf_us = C.TF_US[r.tf]
+        aid = int(getattr(r, "attempt_id", -1))
+
+        def att(status, end_us, _r=r, _side=side, _T=T_us, _aid=aid):
+            if attempts_out is not None:
+                attempts_out.append((_aid, _r.signal_id, symbol, _r.tf, _r.type, _side, _T, status, int(end_us)))
+
         j0 = bisect_left(ot, T_us)
         if j0 >= n_bars:
             cnt["no_entry_bar"] += 1
+            att("no_entry_bar", T_us)
             continue
         atr = float(r.atr)
         if not (atr == atr):
             cnt["invalid_stop"] += 1
+            att("invalid_stop", T_us)
             continue
         defending = float(r.defending_price)
         # ---- stop
@@ -401,6 +531,15 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
         if stop is None:
             stop = defending - side * buffer
         sig_close = float(r.close)
+
+        def minstop_fail(ref, _stop=stop, _side=side, _atr=atr):
+            dist = _side * (ref - _stop)
+            if ms_atr is not None and not dist / _atr >= ms_atr:
+                return True
+            if ms_pct is not None and not dist / ref >= ms_pct:
+                return True
+            return False
+
         # ---- entry
         jf = None
         maker_entry = False
@@ -408,49 +547,90 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             jf = j0
             entry_ref = sig_close
             p_entry = O[jf] * (1 + side * slip)
+            if not side * (entry_ref - stop) > 0:
+                cnt["invalid_stop"] += 1
+                att("invalid_stop", T_us)
+                continue
+            if minstop_fail(entry_ref):
+                cnt["minstop_rejected"] += 1
+                att("minstop_rejected", T_us)
+                continue
         elif mode == "limit":
             lim = cfg.entry["limit"]
             if lim["price"] == "signal_close":
                 lvl = sig_close - side * lim["offset"] * atr
+            elif lim["price"] == "defend_frac":
+                lvl = sig_close - lim["offset"] * (sig_close - defending)
             else:
                 lvl = sig_close - side * lim["offset"] * side * (sig_close - stop)
-            for j in range(j0, min(n_bars, j0 + lim["valid_bars"])):
-                if (side == 1 and L[j] < lvl) or (side == -1 and H[j] > lvl):
+            if not side * (lvl - stop) > 0:
+                cnt["invalid_stop"] += 1
+                att("invalid_stop", T_us)
+                continue
+            if minstop_fail(lvl):
+                cnt["minstop_rejected"] += 1
+                att("minstop_rejected", T_us)
+                continue
+            t_end = T_us + lim["valid_bars"] * tf_us  # valid while open_time < T + N signal-timeframe bars
+            last_valid = None
+            j = j0
+            while j < n_bars and ot[j] < t_end:
+                last_valid = j
+                if (side == 1 and L[j] < lvl) or (side == -1 and H[j] > lvl):  # strictly through the limit
                     jf = j
                     break
+                j += 1
             if jf is None:
                 cnt["unfilled"] += 1
+                att("unfilled", ot[last_valid] if last_valid is not None else T_us)
                 continue
             entry_ref = lvl
             p_entry = lvl
             maker_entry = True
-        else:  # confirm
+        else:  # confirm: wait K signal-timeframe bars, then enter at the next 15m open
             cf = cfg.entry["confirm"]
-            k = cf["bars"]
-            if j0 + k >= n_bars:
-                cnt["no_entry_bar"] += 1
-                continue
-            dead = False
-            for j in range(j0, j0 + k):
+            t_end = T_us + cf["bars"] * tf_us
+            jl = None
+            dead_at = None
+            j = j0
+            while j < n_bars and ot[j] < t_end:
                 if (side == 1 and L[j] <= stop) or (side == -1 and H[j] >= stop):
-                    dead = True
+                    dead_at = j
                     break
-            if dead:
+                jl = j
+                j += 1
+            if dead_at is not None:
                 cnt["confirm_abandoned"] += 1
+                att("abandoned", ot[dead_at])
                 continue
-            last_close = Cl[j0 + k - 1]
+            if jl is None or ct[jl] != t_end:  # missing data inside the window
+                cnt["confirm_abandoned"] += 1
+                att("abandoned", ot[jl] if jl is not None else T_us)
+                continue
+            last_close = Cl[jl]
             if cf["require_close_beyond"] and ((side == 1 and last_close < sig_close) or (side == -1 and last_close > sig_close)):
                 cnt["confirm_abandoned"] += 1
+                att("abandoned", ot[jl])
                 continue
-            jf = j0 + k
+            if jl + 1 >= n_bars:
+                cnt["no_entry_bar"] += 1
+                att("no_entry_bar", T_us)
+                continue
+            if not side * (last_close - stop) > 0:
+                cnt["invalid_stop"] += 1
+                att("invalid_stop", T_us)
+                continue
+            if minstop_fail(last_close):
+                cnt["confirm_abandoned"] += 1
+                att("abandoned", ot[jl])
+                continue
+            jf = jl + 1
             entry_ref = last_close
             p_entry = O[jf] * (1 + side * slip)
         R = side * (entry_ref - stop)
-        if not R > 0:
-            cnt["invalid_stop"] += 1
-            continue
         if max_cost is not None and (2 * (taker + slip)) / (R / entry_ref) > max_cost:
             cnt["cost_rejected"] += 1
+            att("cost_rejected", T_us)
             continue
         fee_entry = maker if maker_entry else taker
         # ---- exit plan
@@ -459,7 +639,10 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
         if tp1C["enabled"]:
             tp_frac = tp1C["fraction"]
             if tp1C["target"] == "prior_swing":
-                end = float(r.last_up_end if side == 1 else r.last_down_end)
+                if has_tp_cols:
+                    end = float(r.tp_up_end if side == 1 else r.tp_down_end)
+                else:
+                    end = float(r.last_up_end if side == 1 else r.last_down_end)
                 if end == end and ((side == 1 and end > entry_ref) or (side == -1 and end < entry_ref)):
                     tp_price = end
             if tp_price is None:
@@ -469,7 +652,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
         if oppC["enabled"]:
             arr = opp.get(symbol, {}).get(-side)
             if arr is not None and len(arr):
-                kk = int(np.searchsorted(arr, T_us, side="right"))
+                kk = int(np.searchsorted(arr, ot[jf], side="right"))  # strictly after the entry bar opened
                 if kk < len(arr):
                     jopp = bisect_left(ct, int(arr[kk]))
         level = None
@@ -490,7 +673,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
         arm_close_adverse = False
         pending = None
         tp_done = False
-        legs = []  # (weight, price, fee_rate)
+        legs = []  # (weight, price, fee_rate, leg open_time)
         rem = 1.0
         best = H[jf] if side == 1 else L[jf]
         worst = L[jf] if side == 1 else H[jf]
@@ -503,7 +686,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             o_, h_, l_, c_ = O[j], H[j], L[j], Cl[j]
             if pending is not None and j > jf:
                 p = o_ * (1 - side * slip)
-                legs.append((rem, p, taker))
+                legs.append((rem, p, taker, ot[j]))
                 exit_bar, exit_reason, rem = j, pending, 0.0
                 break
             # extremes (bars the position was alive through, including this bar's range)
@@ -517,7 +700,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                     best = l_
                 if h_ > worst:
                     worst = h_
-            # (2) stop
+            # (2) stop: always taker + slippage
             raw = None
             if side == 1:
                 if o_ <= cur_stop:
@@ -531,7 +714,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                     raw = cur_stop
             if raw is not None:
                 p = raw * (1 - side * slip)
-                legs.append((rem, p, taker))
+                legs.append((rem, p, taker, ot[j]))
                 exit_bar, rem = j, 0.0
                 if kind == "initial":
                     exit_reason = "structure_stop"
@@ -553,19 +736,14 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                         raw = o_ if o_ <= tp_price else (tp_price if l_ <= tp_price else None)
                     if raw is not None:
                         p = raw * (1 - side * slip)
-                        legs.append((tp_frac, p, taker))
+                        legs.append((tp_frac, p, taker, ot[j]))
                         rem -= tp_frac
                         tp_done = True
                         hit = True
                 if not hit and fix_price is not None:
-                    raw = None
-                    if side == 1:
-                        raw = o_ if o_ >= fix_price else (fix_price if h_ >= fix_price else None)
-                    else:
-                        raw = o_ if o_ <= fix_price else (fix_price if l_ <= fix_price else None)
-                    if raw is not None:
-                        p = raw * (1 - side * slip)
-                        legs.append((rem, p, taker))
+                    # a resting maker order at the target: filled only when price trades strictly through it, at the target price
+                    if (side == 1 and h_ > fix_price) or (side == -1 and l_ < fix_price):
+                        legs.append((rem, fix_price, maker, ot[j]))
                         exit_bar, exit_reason, rem = j, "fixed_r", 0.0
                         break
             # (4) close review
@@ -613,19 +791,23 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             j += 1
         if exit_bar is None:  # data ended while holding
             p = Cl[n_bars - 1] * (1 - side * slip)
-            legs.append((rem, p, taker))
+            legs.append((rem, p, taker, ot[n_bars - 1]))
             exit_bar, exit_reason, rem = n_bars - 1, "end_of_data", 0.0
         gross = 0.0
         fee = p_entry * fee_entry
         wsum = 0.0
         psum = 0.0
-        for w, p, fr in legs:
+        for w, p, fr, _lt in legs:
             gross += w * side * (p - p_entry)
             fee += w * p * fr
             wsum += w
             psum += w * p
         gross_r = gross / R
         fee_r = fee / R
+        fund_r, n_fund, fund_missing = funding_for_trade(
+            fund, fmonths, symbol, side, R, ot[jf], ot[exit_bar], [x[3] for x in legs], [x[0] for x in legs], ot, O, Cl
+        )
+        att("filled", ot[exit_bar])
         rows.append(
             (
                 r.signal_id,
@@ -642,13 +824,18 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                 ot[exit_bar],
                 psum / wsum if wsum else float("nan"),
                 gross_r,
-                gross_r - fee_r,
+                gross_r - fee_r - fund_r,
                 fee_r,
                 side * (best - p_entry) / R,
                 side * (worst - p_entry) / R,
                 exit_bar - jf,
                 exit_reason,
                 tp_done,
+                aid,
+                fund_r,
+                gross_r - fee_r,
+                n_fund,
+                fund_missing,
             )
         )
     return rows, cnt
@@ -658,7 +845,9 @@ _COLS = [
     "signal_id", "symbol", "tf", "type", "side", "signal_time", "entry_time", "entry_price", "entry_reference",
     "stop_initial", "r_dist", "exit_time", "exit_price", "gross_r", "net_r", "fee_r", "mfe_r", "mae_r",
     "bars_held", "exit_reason", "tp1_hit",
+    "attempt_id", "funding_r", "net_r_ex_funding", "n_funding", "funding_missing",
 ]
+_ATT_COLS = ["attempt_id", "signal_id", "symbol", "tf", "type", "side", "signal_time", "status", "end_time"]
 _G: dict = {}
 
 
@@ -666,26 +855,39 @@ def _work(symbol: str):
     cfg, market, sig_by, opp = _G["cfg"], _G["market"], _G["sig_by"], _G["opp"]
     mk = market.bars.get(symbol)
     sig = sig_by[symbol]
+    att: list = []
     if mk is None:
-        return [], {"signals": len(sig), "no_bars": len(sig)}
-    return simulate_symbol(
-        cfg, symbol, sig, mk, market.bias_down.get(symbol, ((), (), ())), market.bi_new.get(symbol), opp, market.ticks.get(symbol)
+        return [], {"signals": len(sig), "no_bars": len(sig)}, [
+            (int(getattr(r, "attempt_id", -1)), r.signal_id, symbol, r.tf, r.type, int(r.side), int(r.time.value // 1000), "no_bars", int(r.time.value // 1000))
+            for r in sig.itertuples(index=False)
+        ]
+    funding = (market.funding, market.funding_months) if market.funding is not None else None
+    rows, cnt = simulate_symbol(
+        cfg, symbol, sig, mk, market.bias_down.get(symbol, ((), (), ())), market.bi_new.get(symbol), opp, market.ticks.get(symbol),
+        funding=funding, attempts_out=att,
     )
+    return rows, cnt, att
 
 
-def simulate(cfg: SimConfig, market: Market, signals: pd.DataFrame, workers: int = 1, opp: dict | None = None):
-    """Return (trades DataFrame, counters). Each signal is simulated on its own."""
+def _us_to_ts(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series.astype("int64"), unit="us", utc=True).astype("datetime64[us, UTC]")
+
+
+def simulate(cfg: SimConfig, market: Market, signals: pd.DataFrame, workers: int = 1, opp: dict | None = None, return_attempts: bool = False):
+    """Return (trades DataFrame, counters), or (trades, attempts, counters) when return_attempts. Signals are simulated independently."""
     if opp is None:
         opp = opposite_times(cfg)
     sig_by = {s: g for s, g in signals.groupby("symbol", sort=False)}
     _G.update(cfg=cfg, market=market, sig_by=sig_by, opp=opp)
     names = sorted(sig_by, key=lambda s: -len(sig_by[s]))
     rows: list = []
+    atts: list = []
     total: dict = {}
 
     def merge(res):
-        rr, cc = res
+        rr, cc, aa = res
         rows.extend(rr)
+        atts.extend(aa)
         for k, v in cc.items():
             total[k] = total.get(k, 0) + v
 
@@ -701,9 +903,19 @@ def simulate(cfg: SimConfig, market: Market, signals: pd.DataFrame, workers: int
         for c in ("signal_time",):
             df[c] = pd.to_datetime(df[c], utc=True).astype("datetime64[us, UTC]")
         for c in ("entry_time", "exit_time"):
-            df[c] = pd.to_datetime(df[c].astype("int64"), unit="us", utc=True).astype("datetime64[us, UTC]")
+            df[c] = _us_to_ts(df[c])
         df["sample"] = C.sample_of_series(df["signal_time"])
         df = df.sort_values(["signal_time", "symbol"], kind="stable").reset_index(drop=True)
     else:
         df["sample"] = []
-    return df, total
+    if not return_attempts:
+        return df, total
+    ad = pd.DataFrame(atts, columns=_ATT_COLS)
+    if len(ad):
+        ad["signal_time"] = _us_to_ts(ad["signal_time"])
+        ad["end_time"] = _us_to_ts(ad["end_time"])
+        ad["sample"] = C.sample_of_series(ad["signal_time"])
+        ad = ad.sort_values(["attempt_id"], kind="stable").reset_index(drop=True) if (ad["attempt_id"] >= 0).all() else ad.sort_values(["signal_time", "symbol"], kind="stable").reset_index(drop=True)
+    else:
+        ad["sample"] = []
+    return df, ad, total

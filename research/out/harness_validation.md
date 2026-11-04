@@ -72,11 +72,7 @@ net R 相關係數：r = 0.999913（n = 5575）
 
 「Donchian 突破（20/55）」解讀為通道長度 N=20 與 N=55 各自成一組訊號（1h 與 4h 各跑 20 與 55）；出場用同 N 的反向突破，另加 2 ATR 停損。這是規劃者的解讀。phase 0 不執行這些實驗，只提交 YAML。
 
-## 各步驟耗時
+## 效能與耗時
 
-- 全量訊號快取（signals build）：# done total=61423s failed=[]
-- 驗證實驗模擬（run.py，不含讀取外的其他步驟）：17.68 秒
+效能與耗時紀錄見 research/out/harness_perf.md（由 research.perf 產生）。
 
-## 效能關卡（p0_perf_15m_all，15m 全期全幣池 in_top20，97,680 筆）
-牆鐘 14.4 秒（bash `time`：real 0m14.424s；環境無 /usr/bin/time）< 600 秒 → PASS。log：research/cache/logs/perf.log。
-全量快取建置：591 幣，`# done total=61423s failed=[]`（log 時間含機器暫停期間，非純運算時間）。
