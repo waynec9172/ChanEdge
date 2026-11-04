@@ -1,6 +1,7 @@
 """Phase 1 final: write research/out/phase1.md from existing results (no new simulation, in-sample only)."""
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -29,7 +30,10 @@ def row(name: str, s: dict) -> str:
             f"{s['long']['net_r']:+.4f} | {s['short']['net_r']:+.4f} |")
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--out', default=str(OUT / 'phase1.md'))
+    args = ap.parse_args(argv)
     S = {f"p1s1_{tf}_{e}": v2(f"p1s1_{tf}_{e}") for tf in TFS for e in EXITS}
     jev = v2("p1s1_15m_cur_jevref")
     d1, d4 = v2("donchian_1h_n20"), v2("donchian_4h_n55")
@@ -56,7 +60,7 @@ def main() -> int:
     other_d = per_best[0] if lever_name == "出場" else ex_main[0]
     lines = [
         "結論：無候選（在 S1 結束，依注意事項第 10 點；14 組參加排名的纏論組 P1/P2 全不成立，限價 fallback 也無組 F1 成立）",
-        f"最佳纏論組 {best}（v2）：淨 R {b['net_r']:+.4f}、PF {b['pf']:.3f}、筆數 {b['n']}、正季 {b['pos_q']}/6、手續費×1.5 淨 R {b['net_fee15']:+.4f}、鄰居 有負（未觸發：P1 不成立，無鄰居可測，判不成立）",
+        f"最佳纏論組 {best}（v2）：淨 R {b['net_r']:+.4f}、PF {b['pf']:.3f}、筆數 {b['n']}、正季 {b['pos_q']}/6、手續費×1.5 淨 R {b['net_fee15']:+.4f}、鄰居 缺鄰居結果（sbuf 0.12/0.18 未跑：P1、P2 不成立，D24 不觸發；判不成立）",
         f"Donchian 基準（v2）：1h n20 淨 R {d1['net_r']:+.4f}、PF {d1['pf']:.3f}、筆數 {d1['n']}；4h n55 淨 R {d4['net_r']:+.4f}、PF {d4['pf']:.3f}、筆數 {d4['n']}；關卡 A：1h 不過、4h 不過",
         f"改善淨 R 最多的槓桿：{lever_name}（Δ淨 R {top[0]:+.4f}："
         + (f"{ex_main[1]} cur → {ex_main[2]}" if lever_name == "出場" else f"15m {per_best[1]} → 1h {per_best[1]}")
@@ -108,8 +112,9 @@ def main() -> int:
           "依原文研究停損條件「基準也不行，就停下來重新想」，交使用者判斷。限價進場與確認進場沒有實際模擬；依使用者裁示，毛 R 低於 +0.05 的組不可能靠限價轉正。", "",
           "## 7. 注意事項", "",
           "- 傳統金融永續在樣本內從未進前 20 名（tradfi 欄 n=0），樣本內無法回答；階段 2 主結果排除這 25 個幣，含它們的版本另列參考（§8.6）。",
-          "- 資金費缺 2026-10：已嘗試下載 Binance vision 月檔，缺的 (幣,月) 用前 3 個月 |rate| 中位數補值（只扣不加）；樣本內受影響筆數見 §2/§8 表的欄位（1h_at2、at3 各 1 筆；Donchian 1h 3 筆、4h 2 筆）。",
-          "- 鄰居：S1 沒有任何組觸發鄰居測試，registry 鄰居 0 個；沒有無可測鄰居的組。",
+          "- 資金費缺 2026-10 的下載結果（funding_fetch.log / augment.log）：targets 1400；dl_monthly 488（全部是 2026-10）；dl_daily 0（日檔不可用）；missing 912。missing 大多是下架幣在 2026-01 到 2026-10 的月檔 404（908 行 404 字樣），另有 4 個非 ASCII 幣名（龙虾、牛来、我踏马来了、币安人生）因 URL 未 percent-encode 而 UnicodeEncodeError，不是網路問題；階段 2 前要不要修由管線或使用者決定。補值：local 13383、dl_monthly 488、imputed 913 個 (幣, 月)，其中 own 278、market 635（前 3 個月 |rate| 中位數，只扣不加）。樣本內受影響筆數見 §2/§8 表的欄位（1h_at2、at3 各 1 筆；Donchian 1h 3 筆、4h 2 筆）。",
+          "- D10：Donchian 關卡 A 兩版（v2 與獨立版）結論相同，都不過；纏論 14 組在獨立版也是 P1、P2 全不成立（獨立版淨 R 全部 < 0、×1.5 淨 R 全部 < −0.02），兩版結論沒有差異。",
+          "- 鄰居：每組都有 §8.2 定義的鄰居；S1 沒有組同時符合 P1 和 P2，也沒有 F1 組，所以沒有觸發任何鄰居測試（registry 鄰居 0 個）。",
           "- 下架幣平線的模擬語意（在最後一根非平線 K 結算、平線期間不計資金費）屬模擬變更，須走 issue 裁決，本輪不處理；階段 2 前須先決定。",
           "- 滑價×3 只是參考欄，不是關卡。", "",
           "## 8. 全部實驗的完整表（執行時產生；v2 與獨立版兩個版本）", "",
@@ -119,8 +124,8 @@ def main() -> int:
           "## 執行者備註", "",
           "- 本檔由 `research/phase1_final.py` 從 `research/cache/results/` 重算（樣本內），§2、§5、§6 與 `phase1_S1.md` 逐格同源；§8 為執行時產生的原表。",
           "- 未跑任何新實驗；registry 26 列不變；oos_log.md 0 位元組。", ""]
-    (OUT / "phase1.md").write_text("\n".join(L))
-    print("wrote", OUT / "phase1.md")
+    Path(args.out).write_text("\n".join(L))
+    print("wrote", args.out)
     return 0
 
 
