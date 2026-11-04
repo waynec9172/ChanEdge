@@ -1,0 +1,27 @@
+name: p0_validate_current_15m
+description: 15m 訊號 + 現行規則，對 baseline 驗證用
+signals:
+  source: chan
+  tf: 15m
+  types: [second_buy, third_buy, second_sell, third_sell]
+  donchian_n: null
+filters:
+  in_top20: true
+  candidate_only: true
+  gate_pass: true
+  jev_min: 0.62
+  max_cost_r: 0.40
+  exclude_reemit: false
+entry:
+  mode: market_next_open
+  limit: {price: signal_close, offset: 0.0, valid_bars: 4}
+  confirm: {bars: 1, require_close_beyond: true}
+stop:
+  buffer_atr: 0.15
+  round_to_tick: true
+exit:
+  preset: current
+costs:
+  taker_bps: 5
+  maker_bps: 2
+  slippage_bps: 1
