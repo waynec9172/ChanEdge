@@ -7,7 +7,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_cur",
       "existing": false
     },
     {
@@ -17,7 +17,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_rat",
       "existing": false
     },
     {
@@ -27,7 +27,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_fx2",
       "existing": false
     },
     {
@@ -37,7 +37,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_fx3",
       "existing": false
     },
     {
@@ -47,7 +47,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_at2",
       "existing": false
     },
     {
@@ -57,7 +57,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_at3",
       "existing": false
     },
     {
@@ -67,7 +67,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_opp",
       "existing": false
     },
     {
@@ -77,7 +77,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_1h_cur",
       "existing": false
     },
     {
@@ -87,7 +87,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_1h_rat",
       "existing": false
     },
     {
@@ -97,7 +97,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_1h_fx2",
       "existing": false
     },
     {
@@ -107,7 +107,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_1h_fx3",
       "existing": false
     },
     {
@@ -117,7 +117,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_1h_at2",
       "existing": false
     },
     {
@@ -127,7 +127,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_1h_at3",
       "existing": false
     },
     {
@@ -137,7 +137,7 @@
       "entry": "market",
       "filter": "hard",
       "ranked": true,
-      "reuse_of": null,
+      "reuse_of": "p1s1_1h_opp",
       "existing": false
     },
     {
@@ -146,8 +146,8 @@
       "exit": "cur",
       "entry": "market",
       "filter": "hard",
-      "ranked": true,
-      "reuse_of": null,
+      "ranked": false,
+      "reuse_of": "p1s1_4h_cur",
       "existing": false
     },
     {
@@ -156,8 +156,8 @@
       "exit": "rat",
       "entry": "market",
       "filter": "hard",
-      "ranked": true,
-      "reuse_of": null,
+      "ranked": false,
+      "reuse_of": "p1s1_4h_rat",
       "existing": false
     },
     {
@@ -166,8 +166,8 @@
       "exit": "fx2",
       "entry": "market",
       "filter": "hard",
-      "ranked": true,
-      "reuse_of": null,
+      "ranked": false,
+      "reuse_of": "p1s1_4h_fx2",
       "existing": false
     },
     {
@@ -176,8 +176,8 @@
       "exit": "fx3",
       "entry": "market",
       "filter": "hard",
-      "ranked": true,
-      "reuse_of": null,
+      "ranked": false,
+      "reuse_of": "p1s1_4h_fx3",
       "existing": false
     },
     {
@@ -186,8 +186,8 @@
       "exit": "at2",
       "entry": "market",
       "filter": "hard",
-      "ranked": true,
-      "reuse_of": null,
+      "ranked": false,
+      "reuse_of": "p1s1_4h_at2",
       "existing": false
     },
     {
@@ -196,8 +196,8 @@
       "exit": "at3",
       "entry": "market",
       "filter": "hard",
-      "ranked": true,
-      "reuse_of": null,
+      "ranked": false,
+      "reuse_of": "p1s1_4h_at3",
       "existing": false
     },
     {
@@ -206,8 +206,8 @@
       "exit": "opp",
       "entry": "market",
       "filter": "hard",
-      "ranked": true,
-      "reuse_of": null,
+      "ranked": false,
+      "reuse_of": "p1s1_4h_opp",
       "existing": false
     },
     {
@@ -237,7 +237,7 @@
       "entry": "market",
       "filter": "hard+jev0.62",
       "ranked": false,
-      "reuse_of": null,
+      "reuse_of": "p1s1_15m_cur_jevref",
       "existing": false
     }
   ],

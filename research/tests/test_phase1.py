@@ -178,7 +178,12 @@ class GenTests(unittest.TestCase):
                 self.assertEqual(y["exit"], S1_EXPECT_EXIT[s["exit"]](s["tf"]))
             self.assertEqual(y["filters"], exp)
             sim.SimConfig.from_dict(y)  # parses
-        self.assertEqual(sum(1 for s in specs if s["ranked"]), 21)
+        self.assertEqual(sum(1 for s in specs if s["ranked"]), 14)  # plan 8.5: the seven 4h rows are reference only
+        for s in specs:
+            if s["tf"] == "4h" and s["name"].startswith("p1s1_"):
+                self.assertFalse(s["ranked"], s["name"])
+            if s["tf"] in ("15m", "1h") and s["exit"] != "dc" and not s["name"].endswith("jevref"):
+                self.assertTrue(s["ranked"], s["name"])
         # the YAML files on disk (if generated) are the same
         for s in specs:
             p = C.EXPERIMENTS / f"{s['name']}.yaml"
@@ -192,8 +197,29 @@ class GenTests(unittest.TestCase):
         self.assertEqual(nb("p1s1_1h_fx3", S1["p1s1_1h_fx3"]), {("fixr", 2.4), ("fixr", 3.6)})
         self.assertEqual(nb("p1s1_4h_at3", S1["p1s1_4h_at3"]), {("atrm", 2.4), ("atrm", 3.6)})
         self.assertEqual(nb("p1s1_4h_at2", S1["p1s1_4h_at2"]), {("atrm", 1.6), ("atrm", 2.4)})
-        for e in ("cur", "rat", "opp"):
-            self.assertEqual(phase1.neighbor_specs(f"p1s1_1h_{e}", S1[f"p1s1_1h_{e}"]), [])
+        for tf in ("15m", "1h"):
+            for e in ("cur", "rat", "opp"):  # plan 8.2: no other table parameter -> stop-buffer neighbours
+                got = phase1.neighbor_specs(f"p1s1_{tf}_{e}", S1[f"p1s1_{tf}_{e}"])
+                self.assertEqual({(n["code"], n["value"]) for n in got}, {("sbuf", 0.12), ("sbuf", 0.18)})
+                self.assertEqual({n["yaml"]["stop"]["buffer_atr"] for n in got}, {0.12, 0.18})
+                self.assertEqual(sorted(n["name"] for n in got), [f"p1s1_{tf}_{e}__nb_sbuf_0p12", f"p1s1_{tf}_{e}__nb_sbuf_0p18"])
+                self.assertTrue(all(n["yaml"]["description"].startswith(f"NEIGHBOR of p1s1_{tf}_{e}: stop.buffer_atr=") for n in got))
+        # fx2 has fixr only (no sbuf); a fallback forces sbuf on top and flags it
+        self.assertEqual({n["code"] for n in phase1.neighbor_specs("p1s1_1h_fx2", S1["p1s1_1h_fx2"])}, {"fixr"})
+        forced = phase1.neighbor_specs("p1s1_1h_fx2", S1["p1s1_1h_fx2"], force_sbuf=True)
+        self.assertEqual({(n["code"], n["fallback_only"]) for n in forced}, {("fixr", False), ("sbuf", True)})
+        # S2 lc on a cur base: only limn; S3 no4h / xtf on a cur base: sbuf; S3 ms13a on cur: only msa
+        cur = S1["p1s1_1h_cur"]
+        lc_cur = copy.deepcopy(cur)
+        lc_cur["entry"] = phase1.ENTRY_S2["lc"]
+        self.assertEqual({(n["code"], n["value"]) for n in phase1.neighbor_specs("x", lc_cur)}, {("limn", 3), ("limn", 5)})
+        for key, val in (("htf_4h", False), ("exclude_tradfi", True)):
+            y = copy.deepcopy(cur)
+            y["filters"][key] = val
+            self.assertEqual({n["code"] for n in phase1.neighbor_specs("x", y)}, {"sbuf"})
+        y = copy.deepcopy(cur)
+        y["filters"]["min_stop_atr"] = 1.3
+        self.assertEqual({n["code"] for n in phase1.neighbor_specs("x", y)}, {"msa"})
         self.assertEqual(phase1.neighbor_specs("p1s1_15m_cur_jevref", S1["p1s1_15m_cur_jevref"])[0]["yaml"]["filters"]["jev_min"], 0.496)
         self.assertEqual(nb("p1s1_15m_cur_jevref", S1["p1s1_15m_cur_jevref"]), {("jev", 0.496), ("jev", 0.744)})
         base = S1["p1s1_1h_fx2"]
@@ -254,17 +280,20 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(g["pos_q"][1])
         # count, net R and PF are compared as raw floats
         base = dict(net_r=0.1, pf=1.3, n=500, pos_q=6, net_fee15=0.05)
-        self.assertTrue(M.gate_a(base, [])["pass"])
-        self.assertFalse(M.gate_a({**base, "n": 499}, [])["pass"])
-        self.assertFalse(M.gate_a({**base, "net_r": 0.0799999}, [])["pass"])
-        self.assertTrue(M.gate_a({**base, "net_r": 0.08}, [])["pass"])
-        self.assertFalse(M.gate_a({**base, "pf": 1.1999999}, [])["pass"])
-        self.assertFalse(M.gate_a({**base, "net_fee15": 0.0}, [])["pass"])
+        nb2 = [0.1, 0.1]
+        self.assertTrue(M.gate_a(base, nb2)["pass"])
+        self.assertFalse(M.gate_a({**base, "n": 499}, nb2)["pass"])
+        self.assertFalse(M.gate_a({**base, "net_r": 0.0799999}, nb2)["pass"])
+        self.assertTrue(M.gate_a({**base, "net_r": 0.08}, nb2)["pass"])
+        self.assertFalse(M.gate_a({**base, "pf": 1.1999999}, nb2)["pass"])
+        self.assertFalse(M.gate_a({**base, "net_fee15": 0.0}, nb2)["pass"])
         self.assertFalse(M.gate_a(base, [0.1, -0.01])["pass"])
         self.assertTrue(M.gate_a(base, [0.1, 0.02])["pass"])
-        g = M.gate_a(base, [])
-        self.assertTrue(g["neighbors"][1])
-        self.assertEqual(g["neighbors_note"], "no testable neighbour")
+        for missing in ([], None):  # plan 8.2: missing neighbour results fail the sixth condition (no "untestable = holds")
+            g = M.gate_a(base, missing)
+            self.assertFalse(g["neighbors"][1])
+            self.assertFalse(g["pass"])
+            self.assertEqual(g["neighbors_note"], "missing neighbour results")
         self.assertEqual(M.gate_a(base, [0.1])["neighbors_note"], "tested")
         # a 5th-decimal rounding must not rescue 0.0799999
         self.assertEqual(f"{0.0799999:.2f}", "0.08")
@@ -285,13 +314,77 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(e(mk(0.0, 0.0), [0.1])["P1"])
         self.assertFalse(e(mk(0.05, -0.0200001), [0.1])["P2"])
         self.assertFalse(e(mk(0.05, 0.0), [0.1, -0.1])["P3"])
-        self.assertTrue(e(mk(0.05, 0.0), None)["no_neighbor"])
-        items = [("c", mk(0.05, 0.0, 300), e(mk(0.05, 0.0), None)), ("b", mk(0.05, 0.0, 300), e(mk(0.05, 0.0), None)),
-                 ("a", mk(0.05, 0.0, 200), e(mk(0.05, 0.0), None)), ("d", mk(0.09, 0.0, 10), e(mk(0.09, 0.0), None)),
+        miss = e(mk(0.05, 0.0), None)
+        self.assertTrue(miss["missing_neighbor"])
+        self.assertFalse(miss["P3"])  # missing neighbour results are not "pass"
+        self.assertFalse(e(mk(0.05, 0.0), [])["eligible"])
+        nbok = [0.1, 0.1]
+        items = [("c", mk(0.05, 0.0, 300), e(mk(0.05, 0.0), nbok)), ("b", mk(0.05, 0.0, 300), e(mk(0.05, 0.0), nbok)),
+                 ("a", mk(0.05, 0.0, 200), e(mk(0.05, 0.0), nbok)), ("d", mk(0.09, 0.0, 10), e(mk(0.09, 0.0), nbok)),
                  ("x", mk(0.2, 0.0, 10), e(mk(0.2, 0.0), [-1.0]))]
         self.assertEqual(M.rank_eligible(items), ["d", "b"])  # net R first, then more trades, then name; x fails P3
         self.assertEqual(M.rank_eligible(items[-1:]), [])  # never padded
         self.assertEqual(M.rank_eligible(items[:1]), ["c"])  # only one eligible -> one
+
+
+class PromoteModeTests(unittest.TestCase):
+    def _write(self, td, text):
+        p = Path(td) / "promote.md"
+        p.write_text(text)
+        return str(p)
+
+    def test_p9_promote_mode_parsing(self):
+        with tempfile.TemporaryDirectory() as td:
+            for mode in ("normal", "fallback", "none"):
+                self.assertEqual(phase1.read_mode(self._write(td, f"PROMOTED: a\nMODE: {mode}\nPROMOTE_COUNT: 1\n")), mode)
+            with self.assertRaises(SystemExit):
+                phase1.read_mode(self._write(td, "PROMOTED: a\nPROMOTE_COUNT: 1\n"))  # missing line
+            with self.assertRaises(SystemExit):
+                phase1.read_mode(self._write(td, "MODE: sideways\n"))  # wrong value
+            # fallback generates only lc and lm; normal generates lc, lm, cf1
+            m0 = phase1.load_manifest()
+            S1 = {s["name"]: s["yaml"] for s in phase1.gen_specs("S1")}
+            for mode, want in (("fallback", {"lc", "lm"}), ("normal", {"lc", "lm", "cf1"})):
+                pf = self._write(td, f"PROMOTED: p1s1_1h_fx2\nMODE: {mode}\nPROMOTE_COUNT: 1\n")
+                saved = {}
+                with mock.patch.object(phase1, "load_manifest", return_value={"S1": [{"name": "p1s1_1h_fx2"}], "S2": [], "S3": [], "neighbors": {}, "skipped": []}), \
+                        mock.patch.object(phase1, "save_manifest", side_effect=lambda m: saved.update(m)), \
+                        mock.patch.object(phase1, "existing_core_shas", return_value={}), \
+                        mock.patch.object(phase1.C, "read_yaml", return_value=copy.deepcopy(S1["p1s1_1h_fx2"])), \
+                        mock.patch.object(phase1, "write_yaml"):
+                    phase1.gen_s2(pf)
+                new = {r["entry"] for r in saved["S2"] if r.get("base") and not r.get("reuse_of")}
+                self.assertEqual(new, want)
+                base_row = [r for r in saved["S2"] if r.get("reuse_of")][0]
+                self.assertEqual(base_row["ranked"], mode == "normal")  # fallback: the market row is a comparison, not a candidate
+                self.assertTrue(all(r["fallback"] == (mode == "fallback") for r in saved["S2"]))
+            self.assertTrue(m0 is not None)
+
+
+class FallbackTests(unittest.TestCase):
+    def test_p10_fallback_s1(self):
+        mk = lambda g, net=0.0, n=100: {"gross_r": g, "net_r": net, "n": n}
+        both = [0.01, 0.02]
+        f = M.fallback_s1
+        self.assertFalse(f([("a", mk(0.0499999), both)])["rows"][0]["F1"])  # raw float boundary
+        self.assertTrue(f([("a", mk(0.05), both)])["rows"][0]["F1"])
+        self.assertTrue(f([("a", mk(0.06), both)])["rows"][0]["F2"])
+        self.assertFalse(f([("a", mk(0.06), [0.01, 0.0])])["rows"][0]["F2"])  # both neighbours must be > 0
+        self.assertFalse(f([("a", mk(0.06), [0.01, -0.01])])["rows"][0]["F2"])
+        self.assertFalse(f([("a", mk(0.06), None)])["rows"][0]["F2"])  # missing neighbours do not pass
+        self.assertEqual(f([("a", mk(0.06), None)])["promoted"], [])
+        # ranking: net R desc, then n desc, then name; at most two; a lone candidate is not padded
+        items = [("c", mk(0.06, -0.01, 300), both), ("b", mk(0.06, -0.01, 300), both), ("a", mk(0.06, -0.01, 200), both),
+                 ("d", mk(0.07, -0.02, 10), both), ("e", mk(0.04, 0.0, 10), both)]
+        self.assertEqual(f(items)["promoted"], ["b", "c"])
+        self.assertEqual(f(items[3:4])["promoted"], ["d"])
+        self.assertEqual(f(items[4:])["promoted"], [])
+        self.assertEqual(f(items)["f1_names"], ["c", "b", "a", "d"])
+
+    def test_p10b_pool_has_no_4h_donchian_or_jev(self):
+        names = [s["name"] for s in phase1.gen_specs("S1") if s["ranked"] and s["tf"] in ("15m", "1h") and s["exit"] != "dc"]
+        self.assertEqual(len(names), 14)
+        self.assertFalse(any("4h" in n or n.startswith("donchian") or n.endswith("jevref") for n in names))
 
 
 if __name__ == "__main__":

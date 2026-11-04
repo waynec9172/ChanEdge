@@ -80,7 +80,7 @@ def summarize(trades: pd.DataFrame, attempts: pd.DataFrame | None = None) -> dic
         out.update(net_r=math.nan, gross_r=math.nan, fee_r=math.nan, funding_r=math.nan, net_fee15=math.nan, pf=math.nan,
                    win=math.nan, first_bar_stop=math.nan, first_tf_bar_stop=math.nan, mfe_med=math.nan, mae_med=math.nan,
                    pos_q=0, quarters=[], long=_block(trades), short=_block(trades), groups={}, exit_reasons={}, n_cross=0,
-                   n_funding_missing=0)
+                   n_funding_missing=0, n_funding_market=0, net_slip3=math.nan)
     else:
         net = trades["net_r"]
         stop0 = (trades["exit_reason"] == "structure_stop") & (trades["bars_held"] == 0)
@@ -112,6 +112,8 @@ def summarize(trades: pd.DataFrame, attempts: pd.DataFrame | None = None) -> dic
             exit_reasons={k: int(v) for k, v in trades["exit_reason"].value_counts().items()},
             n_cross=int((trades["exit_time"] >= IS_CUT_US).sum()),
             n_funding_missing=int(trades["funding_missing"].sum()),
+            n_funding_market=int((trades["n_funding_market"] > 0).sum()) if "n_funding_market" in trades.columns else 0,
+            net_slip3=float((net - 2.0 * trades["slip_r"]).mean()) if "slip_r" in trades.columns else math.nan,
         )
     if attempts is not None:
         st = attempts["status"].value_counts()
@@ -123,7 +125,11 @@ def summarize(trades: pd.DataFrame, attempts: pd.DataFrame | None = None) -> dic
 
 
 def gate_a(s: dict, neighbor_net_r: list[float] | None) -> dict:
-    """Gate A on a v2 summary. Raw floats, no rounding. neighbor_net_r = v2 net R of each tabled neighbour; empty/None -> no testable neighbour (holds)."""
+    """Gate A on a v2 summary. Raw floats, no rounding.
+
+    neighbor_net_r = v2 net R of each tabled neighbour. Plan 8.2: there is no "no testable neighbour" case any more; an empty or
+    None list means the neighbour results are missing and the sixth condition FAILS (note "missing neighbour results").
+    """
     def ok(v, thr):
         return bool(v == v and v >= thr)
 
@@ -138,18 +144,18 @@ def gate_a(s: dict, neighbor_net_r: list[float] | None) -> dict:
         res["neighbors"] = (list(neighbor_net_r), all(x == x and x > 0 for x in neighbor_net_r))
         res["neighbors_note"] = "tested"
     else:
-        res["neighbors"] = ([], True)
-        res["neighbors_note"] = "no testable neighbour"
+        res["neighbors"] = ([], False)
+        res["neighbors_note"] = "missing neighbour results"
     res["pass"] = all(res[k][1] for k in ("net_r", "pf", "n", "pos_q", "fee15", "neighbors"))
     return res
 
 
 def eligibility(s: dict, neighbor_net_r: list[float] | None) -> dict:
-    """Promotion conditions P1-P3 on a v2 summary (plan 3.9)."""
+    """Promotion conditions P1-P3 on a v2 summary (plan 3.9, 8.2). Missing neighbour results -> P3 fails."""
     p1 = bool(s["net_r"] == s["net_r"] and s["net_r"] > 0)
     p2 = bool(s["net_fee15"] == s["net_fee15"] and s["net_fee15"] >= P2_FLOOR)
-    p3 = True if not neighbor_net_r else all(x == x and x > 0 for x in neighbor_net_r)
-    return {"P1": p1, "P2": p2, "P3": p3, "no_neighbor": not neighbor_net_r, "eligible": p1 and p2 and p3}
+    p3 = bool(neighbor_net_r) and all(x == x and x > 0 for x in neighbor_net_r)
+    return {"P1": p1, "P2": p2, "P3": p3, "missing_neighbor": not neighbor_net_r, "eligible": p1 and p2 and p3}
 
 
 def rank_eligible(items: list[tuple[str, dict, dict]], k: int = 2) -> list[str]:
@@ -157,3 +163,23 @@ def rank_eligible(items: list[tuple[str, dict, dict]], k: int = 2) -> list[str]:
     ok = [(n, s) for n, s, e in items if e["eligible"]]
     ok.sort(key=lambda x: (-x[1]["net_r"], -x[1]["n"], x[0]))
     return [n for n, _ in ok[:k]]
+
+
+F1_GROSS = 0.05
+
+
+def fallback_s1(items: list[tuple[str, dict, list[float] | None]], k: int = 2) -> dict:
+    """Plan 8.4 limit-order fallback (mechanical). items = (name, v2 summary, [v2 gross R of the two sbuf neighbours] or None).
+
+    The caller passes only the candidate pool (15m and 1h ranked main experiments; never 4h, Donchian or the JEV reference).
+    F1: mean(gross_r) >= 0.05 (raw float). F2: both sbuf neighbours have v2 mean(gross_r) > 0 (missing -> fails).
+    Ranking among F1&F2 by v2 net R desc, then more trades, then name; at most k.
+    """
+    rows = []
+    for name, s, nb in items:
+        g = s["gross_r"]
+        f1 = bool(g == g and g >= F1_GROSS)
+        f2 = bool(nb) and len(nb) == 2 and all(x == x and x > 0 for x in nb)
+        rows.append({"name": name, "gross_r": g, "net_r": s["net_r"], "n": s["n"], "F1": f1, "nb_gross": list(nb) if nb else [], "F2": f2, "both": f1 and f2})
+    ok = sorted((r for r in rows if r["both"]), key=lambda r: (-r["net_r"], -r["n"], r["name"]))
+    return {"rows": rows, "promoted": [r["name"] for r in ok[:k]], "f1_names": [r["name"] for r in rows if r["F1"]]}

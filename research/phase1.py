@@ -32,6 +32,7 @@ from research import metrics as M
 from research import run as R
 from research import sim
 
+SBUF = (0.12, 0.18)
 MANIFEST = C.EXPERIMENTS / "p1_manifest.json"
 NB_DIR = C.EXPERIMENTS / "neighbors"
 TFS = ("15m", "1h", "4h")
@@ -108,7 +109,7 @@ def gen_specs(rnd: str = "S1") -> list[dict]:
     for tf in TFS:
         for code in EXITS:
             name = f"p1s1_{tf}_{code}"
-            out.append({"name": name, "tf": tf, "exit": code, "entry": "market", "filter": "hard", "ranked": True, "reuse_of": None, "yaml": s1_yaml(name, tf, code), "existing": False})
+            out.append({"name": name, "tf": tf, "exit": code, "entry": "market", "filter": "hard", "ranked": tf != "4h", "reuse_of": None, "yaml": s1_yaml(name, tf, code), "existing": False})
     for name, tf in (("donchian_1h_n20", "1h"), ("donchian_4h_n55", "4h")):
         out.append({"name": name, "tf": tf, "exit": "dc", "entry": "market", "filter": "top20", "ranked": False, "reuse_of": None, "yaml": C.read_yaml(C.EXPERIMENTS / f"{name}.yaml"), "existing": True})
     out.append({"name": "p1s1_15m_cur_jevref", "tf": "15m", "exit": "cur", "entry": "market", "filter": "hard+jev0.62", "ranked": False, "reuse_of": None,
@@ -118,15 +119,20 @@ def gen_specs(rnd: str = "S1") -> list[dict]:
 
 # --------------------------------------------------------------------------- neighbours (plan 3.10, fixed table)
 def _num(v: float) -> str:
-    return f"{v:.6g}".replace(".", "p")
+    return f"{v:.6g}".replace(".", "p")  # 0.12 -> 0p12
 
 
 def _scaled(v: float) -> tuple[float, float]:
     return round(v * 0.8, 6), round(v * 1.2, 6)
 
 
-def neighbor_specs(name: str, y: dict) -> list[dict]:
-    """Neighbours of one experiment: one parameter changed at a time. [{code, value, name, yaml}]; no table parameter -> []."""
+def neighbor_specs(name: str, y: dict, force_sbuf: bool = False) -> list[dict]:
+    """Neighbours of one experiment: one parameter changed at a time. [{code, value, name, yaml, fallback_only}].
+
+    Plan 8.2: a chan experiment without any other table parameter gets the stop-buffer neighbours sbuf 0.12 / 0.18.
+    force_sbuf (plan 8.4, S1 fallback) adds them to experiments that have table parameters too; those are flagged
+    fallback_only and never count for P3 / gate A.
+    """
     out = []
 
     def add(code, value, mutate):
@@ -134,8 +140,9 @@ def neighbor_specs(name: str, y: dict) -> list[dict]:
         mutate(z)
         nm = f"{name}__nb_{code}_{_num(value)}"
         z["name"] = nm
-        z["description"] = f"NEIGHBOR of {name}: {code}={_num(value).replace('p', '.')}"
-        out.append({"code": code, "value": value, "name": nm, "yaml": z})
+        label = "stop.buffer_atr" if code == "sbuf" else code
+        z["description"] = f"NEIGHBOR of {name}: {label}={_num(value).replace('p', '.')}"
+        out.append({"code": code, "value": value, "name": nm, "yaml": z, "fallback_only": False})
 
     raw_exit = y["exit"]
     fx = raw_exit.get("fixed_r", {})
@@ -170,6 +177,11 @@ def neighbor_specs(name: str, y: dict) -> list[dict]:
     if sg["source"] == "donchian":
         for v in {20: (16, 24), 55: (44, 66)}.get(sg["donchian_n"], ()):
             add("dcn", v, lambda z, v=v: (z["signals"].update(donchian_n=v, types=[f"dc{v}_long", f"dc{v}_short"])))
+    if sg["source"] == "chan" and (not out or force_sbuf):
+        had = bool(out)
+        for v in SBUF:
+            add("sbuf", v, lambda z, v=v: z["stop"].update(buffer_atr=v))
+            out[-1]["fallback_only"] = had
     return out
 
 
@@ -198,6 +210,18 @@ def read_promoted(path: str) -> list[str]:
             v = m.group(1).strip()
             return [] if v.lower() == "none" or not v else [x.strip() for x in v.split(",") if x.strip()]
     raise SystemExit(f"no PROMOTED: line in {path}")
+
+
+def read_mode(path: str) -> str:
+    """MODE: normal|fallback|none line of an S1 promotion file (plan 8.9). Missing or other value -> SystemExit."""
+    for ln in Path(path).read_text().splitlines():
+        m = re.match(r"\s*MODE:\s*([A-Za-z]+)", ln)
+        if m:
+            v = m.group(1).lower()
+            if v in ("normal", "fallback", "none"):
+                return v
+            raise SystemExit(f"bad MODE value {v!r} in {path} (want normal|fallback|none)")
+    raise SystemExit(f"no MODE: line in {path}")
 
 
 def existing_core_shas() -> dict[str, str]:
@@ -258,6 +282,10 @@ def _base_name_parts(name: str) -> str:
 
 def gen_s2(promote: str) -> int:
     promoted = read_promoted(promote)
+    mode = read_mode(promote)
+    if mode == "none" and promoted:
+        raise SystemExit("MODE none but PROMOTED is not empty")
+    fallback = mode == "fallback"
     m = load_manifest()
     known = {x["name"] for x in m["S1"]}
     for b in promoted:
@@ -269,13 +297,15 @@ def gen_s2(promote: str) -> int:
         y0 = C.read_yaml(C.EXPERIMENTS / f"{b}.yaml")
         c = _base_name_parts(b)
         for code, entry in ENTRY_S2.items():
+            if fallback and code == "cf1":
+                continue
             y = copy.deepcopy(y0)
             y["name"] = f"p1s2_{c}_{code}"
             y["entry"] = copy.deepcopy(entry)
             y["description"] = f"S2 {c}：進場改為{ENTRY_TEXT[code]}；其餘同 {b}"
-            specs.append({"name": y["name"], "tf": y["signals"]["tf"], "exit": c, "entry": code, "filter": "hard", "ranked": True, "reuse_of": None, "base": b, "yaml": y, "existing": False})
+            specs.append({"name": y["name"], "tf": y["signals"]["tf"], "exit": c, "entry": code, "filter": "hard", "ranked": True, "reuse_of": None, "base": b, "fallback": fallback, "yaml": y, "existing": False})
     rows = _emit(specs, seen, C.EXPERIMENTS)
-    m["S2"] = [{"name": b, "base": b, "entry": "market", "reuse_of": b, "ranked": True} for b in promoted] + rows
+    m["S2"] = [{"name": b, "base": b, "entry": "market", "reuse_of": b, "ranked": not fallback, "fallback": fallback, "note": "對照，非候選" if fallback else ""} for b in promoted] + rows
     save_manifest(m)
     print(f"S2: {len(rows)} new rows from {promoted}")
     return 0
@@ -368,18 +398,24 @@ def neighbor_plan(rnd: str) -> list[dict]:
     for row in round_names(rnd):
         if row.get("filter") == "hard+jev0.62":
             continue
+        if rnd == "S1" and not row.get("ranked", True) and row.get("exit") != "dc":
+            continue  # 4h reference rows (plan 8.5): no neighbours
         base = row.get("reuse_of") or row["name"]
         if not exists_result(base):
             continue
         s = v2_summary(base)
         e = M.eligibility(s, None)
-        if not (e["P1"] and e["P2"]):
+        fb = rnd == "S1" and row.get("ranked", True) and row["tf"] in ("15m", "1h") and s["gross_r"] == s["gross_r"] and s["gross_r"] >= M.F1_GROSS
+        if not ((e["P1"] and e["P2"]) or fb):
             continue
-        for nb in neighbor_specs(base, C.read_yaml(C.EXPERIMENTS / f"{base}.yaml")):
+        for nb in neighbor_specs(base, C.read_yaml(C.EXPERIMENTS / f"{base}.yaml"), force_sbuf=fb):
+            if nb["fallback_only"] is False and not (e["P1"] and e["P2"]):
+                if not (nb["code"] == "sbuf" and fb):
+                    continue  # only the fallback sbuf pair is owed when P1/P2 fail
             reuse = seen.get(core_of(nb["yaml"]))
             if reuse is None:
                 seen[core_of(nb["yaml"])] = nb["name"]
-            plan.append({"main": base, **{k: nb[k] for k in ("code", "value", "name", "yaml")}, "reuse_of": reuse})
+            plan.append({"main": base, **{k: nb[k] for k in ("code", "value", "name", "yaml", "fallback_only")}, "reuse_of": reuse})
     return plan
 
 
@@ -396,7 +432,7 @@ def neighbors(rnd: str, workers: int, status_only: bool) -> int:
                     print(f"FAILED {p['name']}", flush=True)
                     return 1
         m["neighbors"].setdefault(p["main"], [])
-        entry = {"param": p["code"], "value": p["value"], "experiment": p["name"], "reuse_of": p["reuse_of"]}
+        entry = {"param": p["code"], "value": p["value"], "experiment": p["name"], "reuse_of": p["reuse_of"], "fallback_only": p["fallback_only"]}
         if entry not in m["neighbors"][p["main"]]:
             m["neighbors"][p["main"]].append(entry)
     if status_only:
@@ -407,10 +443,16 @@ def neighbors(rnd: str, workers: int, status_only: bool) -> int:
     return 0
 
 
-def neighbor_values(main: str) -> list[float]:
+def neighbor_values(main: str, key: str = "net_r", fallback: bool = False) -> list[float]:
+    """v2 `key` of the main experiment's neighbours. fallback=False: the table neighbours (P3 / gate A); True: only the sbuf pair of plan 8.4."""
     out = []
     for e in load_manifest()["neighbors"].get(main, []):
-        out.append(v2_summary(e["reuse_of"] or e["experiment"])["net_r"])
+        if fallback:
+            if e["param"] != "sbuf":
+                continue
+        elif e.get("fallback_only"):
+            continue
+        out.append(v2_summary(e["reuse_of"] or e["experiment"])[key])
     return out
 
 
@@ -419,23 +461,37 @@ def fmt_r(x):
     return "n/a" if x != x else f"{x:+.4f}"
 
 
+def tag_of(r: dict) -> str:
+    if r.get("filter") == "hard+jev0.62":
+        return "參考列"
+    if r.get("exit") == "dc":
+        return "基準"
+    if not r.get("ranked", True):
+        return "參考（4h）" if r.get("tf") == "4h" else ("對照，非候選" if r.get("note") else "參考")
+    return "沿用" if r.get("reuse_of") else ""
+
+
+def main_row(r: dict, s: dict, tag: str) -> str:
+    return (f"| {r['name']} | {tag} | {s['n']} | {fmt_r(s['net_r'])} | {fmt_r(s['gross_r'])} | {s['fee_r']:.4f} | {fmt_r(s['funding_r'])} | {fmt_r(s['net_fee15'])} | {fmt_r(s['net_slip3'])} | "
+            f"{s['pf']:.3f} | {s['win']:.1%} | {s['first_bar_stop']:.1%} | {s['mfe_med']:.2f} | {s['mae_med']:.2f} | {s['pos_q']}/6 | {s['n_cross']} | {s['n_funding_missing']}({s['n_funding_market']}) |")
+
+
 def table(rnd: str, out: str | None) -> int:
     rows = [r for r in round_names(rnd) if exists_result(r.get("reuse_of") or r["name"])]
     lines = [f"# Phase 1 {rnd} 結果（只含樣本內；v2 = 每幣同時最多一筆）", ""]
-    head = "| 實驗 | 標記 | n | 淨R | 毛R | 手續費R | funding_r | ×1.5淨R | PF | 勝率 | 第一根停損 | MFE中位 | MAE中位 | 正季 | n_cross |"
-    sep = "|" + " --- |" * 15
+    head = "| 實驗 | 標記 | n | 淨R | 毛R | 手續費R | funding_r | ×1.5淨R | 滑價×3淨R（參考，不是關卡） | PF | 勝率 | 第一根停損 | MFE中位 | MAE中位 | 正季 | n_cross | 資金費受影響筆數(含market) |"
+    sep = "|" + " --- |" * 17
     v2 = {}
     lines += ["## v2 主表（每幣最多一筆）", "", head, sep]
     for r in rows:
         key = r.get("reuse_of") or r["name"]
         s = v2.setdefault(key, v2_summary(key))
-        tag = "參考列" if r.get("filter") == "hard+jev0.62" else ("基準" if not r.get("ranked", True) else ("沿用" if r.get("reuse_of") else ""))
-        lines.append(f"| {r['name']} | {tag} | {s['n']} | {fmt_r(s['net_r'])} | {fmt_r(s['gross_r'])} | {s['fee_r']:.4f} | {fmt_r(s['funding_r'])} | {fmt_r(s['net_fee15'])} | {s['pf']:.3f} | {s['win']:.1%} | {s['first_bar_stop']:.1%} | {s['mfe_med']:.2f} | {s['mae_med']:.2f} | {s['pos_q']}/6 | {s['n_cross']} |")
+        lines.append(main_row(r, s, tag_of(r)))
     lines += ["", "## 獨立版主表", "", head, sep]
     for r in rows:
         key = r.get("reuse_of") or r["name"]
         s = ind_summary(key)
-        lines.append(f"| {r['name']} |  | {s['n']} | {fmt_r(s['net_r'])} | {fmt_r(s['gross_r'])} | {s['fee_r']:.4f} | {fmt_r(s['funding_r'])} | {fmt_r(s['net_fee15'])} | {s['pf']:.3f} | {s['win']:.1%} | {s['first_bar_stop']:.1%} | {s['mfe_med']:.2f} | {s['mae_med']:.2f} | {s['pos_q']}/6 | {s['n_cross']} |")
+        lines.append(main_row(r, s, ""))
     lines += ["", "## v2 各季淨 R 總和", "", "| 實驗 | " + " | ".join(C.IS_QUARTERS) + " |", "|" + " --- |" * 7]
     for r in rows:
         s = v2[r.get("reuse_of") or r["name"]]
@@ -452,15 +508,30 @@ def table(rnd: str, out: str | None) -> int:
         key = r.get("reuse_of") or r["name"]
         nbv = neighbor_values(key)
         e = M.eligibility(v2[key], nbv)
-        p3 = "無可測鄰居（成立）" if e["no_neighbor"] else ("全正" if e["P3"] else "有負")
+        p3 = "缺鄰居結果（不成立）" if e["missing_neighbor"] else ("全正" if e["P3"] else "有負")
         lines.append(f"| {r['name']} | {e['P1']} | {e['P2']} | {p3} | {e['eligible']} |")
+    if rnd == "S1":
+        pool = [r for r in rows if r.get("ranked", True) and r.get("exit") != "dc" and r.get("tf") in ("15m", "1h") and r.get("filter") != "hard+jev0.62"]
+        items = []
+        for r in pool:
+            key = r.get("reuse_of") or r["name"]
+            nbg = neighbor_values(key, "gross_r", fallback=True)
+            items.append((key, v2[key], nbg if len(nbg) == 2 else None))
+        fb = M.fallback_s1(items)
+        lines += ["", "## (k) fallback 機械判定（只在正常晉級 0 組時使用；以驗收者 promote 檔為準）", "",
+                  "候選池 = 15m 與 1h 共 14 組。F1 = v2 毛R ≥ +0.05；F2 = 兩個 sbuf 鄰居（0.12、0.18）v2 毛R 都 > 0；排序用 v2 淨R。", "",
+                  "| 實驗 | v2 毛R | F1 | sbuf 0.12 / 0.18 毛R | F2 | v2 淨R | n |", "| --- | --- | --- | --- | --- | --- | --- |"]
+        for x in fb["rows"]:
+            nbtxt = " / ".join(fmt_r(v) for v in x["nb_gross"]) if x["nb_gross"] else ("缺" if x["F1"] else "—（未跑）")
+            lines.append(f"| {x['name']} | {fmt_r(x['gross_r'])} | {x['F1']} | {nbtxt} | {x['F2'] if x['F1'] else '—'} | {fmt_r(x['net_r'])} | {x['n']} |")
+        lines += ["", f"機械判定前 2 組（F1 且 F2）：{', '.join(fb['promoted']) if fb['promoted'] else '無'}"]
     nbm = load_manifest()["neighbors"]
     if nbm:
-        lines += ["", "## 鄰居（v2 n / 淨R）", "", "| 主實驗 | 參數 | 值 | 鄰居實驗 | n | 淨R | 沿用 |", "| --- | --- | --- | --- | --- | --- | --- |"]
+        lines += ["", "## 鄰居（v2 n / 淨R / 毛R）", "", "| 主實驗 | 參數 | 值 | 鄰居實驗 | n | 淨R | 毛R | 沿用 | 僅 fallback |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
         for main, lst in nbm.items():
             for e in lst:
                 s = v2_summary(e["reuse_of"] or e["experiment"])
-                lines.append(f"| {main} | {e['param']} | {e['value']} | {e['experiment']} | {s['n']} | {fmt_r(s['net_r'])} | {e['reuse_of'] or ''} |")
+                lines.append(f"| {main} | {e['param']} | {e['value']} | {e['experiment']} | {s['n']} | {fmt_r(s['net_r'])} | {fmt_r(s['gross_r'])} | {e['reuse_of'] or ''} | {e.get('fallback_only', False)} |")
     flagged = [r["name"] for r in rows if v2[r.get("reuse_of") or r["name"]]["net_r"] >= 0.5]
     lines += ["", "## 疑似錯誤標記（v2 淨 R ≥ +0.5）", "", ", ".join(flagged) if flagged else "無"]
     sk = load_manifest().get("skipped", [])
@@ -479,15 +550,15 @@ def gatea(donchian: bool, out: str | None) -> int:
     if not donchian:
         names += [x["base"] for x in m["S3"] if x.get("base")]
     names = list(dict.fromkeys(names))
-    lines = ["# 關卡 A（v2；獨立版另列）", "", "| 實驗 | 版本 | 淨R≥+0.08 | PF≥1.2 | n≥500 | 正季≥70% | ×1.5淨R>0 | 鄰居同號 | 通過 |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    lines = ["# 關卡 A（v2；獨立版另列）", "", "| 實驗 | 版本 | 淨R≥+0.08 | PF≥1.2 | n≥500 | 正季≥70% | ×1.5淨R>0 | 鄰居同號 | 通過 | 滑價×3淨R（參考，不是關卡） |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for n in names:
         if not exists_result(n):
             continue
         for label, s in (("v2", v2_summary(n)), ("獨立", ind_summary(n))):
             g = M.gate_a(s, neighbor_values(n))
             cell = lambda k, f: f"{f(g[k][0])} {'✓' if g[k][1] else '✗'}"
-            nb = ("無可測鄰居 ✓" if g["neighbors_note"] != "tested" else ("全正 ✓" if g["neighbors"][1] else "有負 ✗"))
-            lines.append(f"| {n} | {label} | {cell('net_r', fmt_r)} | {cell('pf', lambda x: f'{x:.3f}')} | {cell('n', str)} | {cell('pos_q', lambda x: f'{x}/6')} | {cell('fee15', fmt_r)} | {nb} | {g['pass']} |")
+            nb = ("缺鄰居結果 ✗" if g["neighbors_note"] != "tested" else ("全正 ✓" if g["neighbors"][1] else "有負 ✗"))
+            lines.append(f"| {n} | {label} | {cell('net_r', fmt_r)} | {cell('pf', lambda x: f'{x:.3f}')} | {cell('n', str)} | {cell('pos_q', lambda x: f'{x}/6')} | {cell('fee15', fmt_r)} | {nb} | {g['pass']} | {fmt_r(s['net_slip3'])} |")
     Path(out or C.OUT / "phase1_gateA.md").write_text("\n".join(lines) + "\n")
     return 0
 
@@ -511,7 +582,7 @@ def sanity(rnd: str) -> int:
             k = y["entry"]["confirm"]["bars"]
             v += int((t["entry_time"] < t["signal_time"] + t["tf"].map(C.TF_US).map(lambda x: pd.Timedelta(microseconds=x)) * k).sum())
         miss = int(t["funding_missing"].sum())
-        print(f"{'OK  ' if v == 0 else 'FAIL'} {name}: violations={v} funding_missing={miss}")
+        print(f"{'OK  ' if v == 0 else 'FAIL'} {name}: violations={v} funding_missing={miss} (market basis {int((t['n_funding_market'] > 0).sum())})")
         bad += v
     print("sanity", "OK" if bad == 0 else f"FAIL ({bad})")
     return 0 if bad == 0 else 1

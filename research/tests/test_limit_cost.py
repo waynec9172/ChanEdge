@@ -211,5 +211,41 @@ class CostTests(unittest.TestCase):
         self.assertAlmostEqual(s["net_r"], gross - fee - fr, places=12)
 
 
+    def test_k6_slip_r_and_slip3(self):
+        IDX = {n: i for i, n in enumerate(sim._COLS)}
+        # (a) market entry + structure stop: slip_r = (O*slip + stop*slip) / R
+        rows = [FLAT, FLAT, (100.0, 100.2, 97.0, 97.5), FLAT]
+        out, _ = run(make_cfg(), rows, make_sig())
+        self.assertEqual(col(out, "exit_reason"), "structure_stop")
+        stop = col(out, "stop_initial")
+        self.assertAlmostEqual(out[0][IDX["slip_r"]], (100.0 * SLIP + stop * SLIP) / R_LONG, places=12)
+        # gap through the stop: the open is the raw price
+        rows = [FLAT, FLAT, (96.0, 96.5, 95.0, 95.5), FLAT]
+        out, _ = run(make_cfg(), rows, make_sig())
+        self.assertAlmostEqual(out[0][IDX["slip_r"]], (100.0 * SLIP + 96.0 * SLIP) / R_LONG, places=12)
+        # (b) limit entry + fixed_r maker exit: no slippage at all
+        fx = {"fixed_r": {"enabled": True, "r": 1.0}}
+        rows = [FLAT, (100.0, 100.5, 99.4, 100.0), (99.6, 105.0, 99.5, 104.0), FLAT]
+        out, _ = run(make_cfg(entry=LIM(n=2), exit=fx), rows, make_sig())
+        self.assertEqual(col(out, "exit_reason"), "fixed_r")
+        self.assertEqual(out[0][IDX["slip_r"]], 0.0)
+        # (c) current preset with TP1: the TP1 leg enters with weight 0.5
+        exit_ = {"tp1": {"enabled": True, "fraction": 0.5, "target": "prior_swing", "r_fallback": 1.5}}
+        rows = [FLAT, FLAT, (100.0, 103.5, 99.5, 102.0), (102.0, 102.0, 90.0, 91.0), FLAT]
+        out, _ = run(make_cfg(exit=exit_), rows, make_sig(up_end=103.0))
+        self.assertTrue(col(out, "tp1_hit"))
+        r = out[0]
+        want = (100.0 * SLIP + 0.5 * 103.0 * SLIP + 0.5 * r[IDX["stop_initial"]] * SLIP) / R_LONG
+        self.assertAlmostEqual(r[IDX["slip_r"]], want, places=12)
+        # (d) the same data with 3 bp: identical exits, net_r == net_r(1bp) - 2 * slip_r
+        for cfg_kw, rws in (({}, [FLAT, FLAT, (100.0, 100.2, 97.0, 97.5), FLAT]), ({"exit": exit_}, rows)):
+            sig = make_sig(up_end=103.0)
+            o1, _ = run(make_cfg(**cfg_kw), rws, sig)
+            c3 = make_cfg(costs={"taker_bps": 5, "maker_bps": 2, "slippage_bps": 3}, **cfg_kw)
+            o3, _ = run(c3, rws, sig)
+            self.assertEqual((o1[0][IDX["exit_time"]], o1[0][IDX["exit_reason"]]), (o3[0][IDX["exit_time"]], o3[0][IDX["exit_reason"]]))
+            self.assertLess(abs(o3[0][IDX["net_r"]] - (o1[0][IDX["net_r"]] - 2 * o1[0][IDX["slip_r"]])), 1e-4)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -98,5 +98,73 @@ class FundingTests(unittest.TestCase):
         self.assertEqual(got, [1693584000000 * 1000] * 3)
 
 
+    def test_f8_imputed_events_cost_only(self):
+        # an imputed event (3-tuple record: times, rates, imputed flags) is a cost for long and short alike
+        fund_long = {FUND_KEY: (np.array([ot(3)], dtype="int64"), np.array([RATE]), np.array([True]), np.array([False]))}
+        for side, sig in ((1, make_sig()), (-1, make_sig(side=-1, defending=102.0, typ="second_sell"))):
+            out, _ = sim.simulate_symbol(make_cfg(), FUND_KEY, sig, make_bars([FLAT] * 6), ((), (), ()), None, {}, 0.01, funding=(fund_long, {FUND_KEY: set()}))
+            self.assertGreater(out[0][IDX["funding_r"]], 0)
+            self.assertEqual(out[0][IDX["n_funding_imputed"]], 1)
+            self.assertTrue(out[0][IDX["funding_missing"]])  # affected flag
+        # a real event still follows the side
+        (out, _), _ = run_f(make_cfg(), [FLAT] * 6, make_sig(side=-1, defending=102.0, typ="second_sell"), [ot(3)], [RATE])
+        self.assertLess(out[0][IDX["funding_r"]], 0)
+        self.assertEqual(out[0][IDX["n_funding_imputed"]], 0)
+
+    def test_f9_impute_prior3_median_and_schedule(self):
+        hist = np.array([0.0001, -0.0003, 0.0002, 0.0004, -0.0001])
+        ev, rate, h, basis = augment.impute_month_events("2026-10", np.abs(hist), np.array([9.0]), 8, 10**18)
+        self.assertEqual((rate, basis, h), (float(np.median(np.abs(hist))), "own", 8))
+        self.assertEqual(len(ev), 31 * 3)
+        self.assertEqual(ev[0], augment.month_start_us("2026-10"))
+        self.assertEqual(ev[1] - ev[0], 8 * 3_600_000_000)
+        ev4, _r, h4, _b = augment.impute_month_events("2026-10", np.abs(hist), np.empty(0), 4, 10**18)
+        self.assertEqual((h4, len(ev4)), (4, 31 * 6))
+        evd, _r, hd, _b = augment.impute_month_events("2026-10", np.abs(hist), np.empty(0), None, 10**18)
+        self.assertEqual(hd, 8)  # no interval known -> 8 h
+        # events stop at the last bar
+        cut = augment.month_start_us("2026-10") + 20 * 3_600_000_000
+        self.assertEqual(len(augment.impute_month_events("2026-10", np.abs(hist), np.empty(0), 8, cut)[0]), 3)
+        # no own history -> market median, basis market; nothing at all -> None
+        _e, rate, _h, basis = augment.impute_month_events("2026-10", np.empty(0), np.array([0.0002, 0.0004, 0.0009]), 8, 10**18)
+        self.assertEqual((rate, basis), (0.0004, "market"))
+        self.assertIsNone(augment.impute_month_events("2026-10", np.empty(0), np.empty(0), 8, 10**18))
+        # the window is the three calendar months before the month
+        self.assertEqual(augment.shift_month("2026-10", -3), "2026-07")
+        self.assertEqual(augment.shift_month("2026-01", -1), "2025-12")
+
+    def test_f10_fetch_validation(self):
+        import hashlib
+        import io
+        import zipfile
+
+        def mkzip(member, text):
+            b = io.BytesIO()
+            with zipfile.ZipFile(b, "w") as z:
+                z.writestr(member, text)
+            return b.getvalue()
+
+        name = "BTCUSDT-fundingRate-2026-10.csv"
+        lo, hi = augment.month_start_us("2026-10"), augment.month_start_us("2026-11")
+        csv = "calc_time,funding_interval_hours,last_funding_rate\n1790812800000,8,0.0001\n"
+        good = mkzip(name, csv)
+        ck = hashlib.sha256(good).hexdigest() + "  x.zip\n"
+        df = augment.validate_funding_zip(good, ck, name, lo, hi)
+        self.assertEqual(len(df), 1)
+        bad_cases = {
+            "checksum": (good, "0" * 64 + "  x.zip", name),
+            "member name": (mkzip("other.csv", csv), None, name),
+            "path": (mkzip("sub/" + name, csv), None, name),
+            "columns": (mkzip(name, "calc_time,rate\n1790812800000,0.1\n"), None, name),
+            "outside month": (mkzip(name, "calc_time,funding_interval_hours,last_funding_rate\n1700000000000,8,0.0001\n"), None, name),
+        }
+        for label, (z, cks, member) in bad_cases.items():
+            cks = cks or hashlib.sha256(z).hexdigest() + "  x.zip"
+            with self.assertRaises(ValueError, msg=label):
+                augment.validate_funding_zip(z, cks, member, lo, hi)
+        with self.assertRaises(ValueError):
+            augment.validate_funding_zip(b"not a zip", hashlib.sha256(b"not a zip").hexdigest(), name, lo, hi)
+
+
 if __name__ == "__main__":
     unittest.main()

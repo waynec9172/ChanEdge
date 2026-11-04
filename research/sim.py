@@ -262,10 +262,16 @@ def load_funding():
     if not (fp.exists() and mp.exists()):
         return None, None
     f = pd.read_parquet(fp).sort_values(["symbol", "funding_time"], kind="stable")
+    if "imputed" not in f.columns:
+        f["imputed"] = False
+    if "basis" not in f.columns:
+        f["basis"] = ""
     out = {}
     for sym, g in f.groupby("symbol", sort=False):
-        out[sym] = (_us(g["funding_time"]), g["rate"].to_numpy(float))
+        out[sym] = (_us(g["funding_time"]), g["rate"].to_numpy(float), g["imputed"].to_numpy(bool), (g["basis"] == "market").to_numpy(bool))
     m = pd.read_parquet(mp)
+    if "source" in m.columns:
+        m = m[m["source"] != "imputed"]  # months served by an imputed source count as "affected" (funding_missing)
     months = {sym: set(g["month"]) for sym, g in m.groupby("symbol", sort=False)}
     return out, months
 
@@ -410,17 +416,23 @@ def funding_for_trade(fund, fmonths, symbol, side, R, entry_us, exit_us, legs_ot
     """Funding cost in R for one trade. Events F with entry_us < F <= exit_us; weight = share of legs exiting at or after F.
 
     mark = close of the 15m bar whose close_time == F, else open of the bar whose open_time == F, else the event is skipped.
-    Returns (funding_r, n_events_counted, missing_flag).
+    Imputed events (plan 8.7) are always a cost: w * rate * mark, no side. Real events: w * side * rate * mark.
+    Returns (funding_r, n_events_counted, missing_flag, n_imputed, n_market_imputed).
     """
     if fund is None:
-        return 0.0, 0, False
+        return 0.0, 0, False, 0, 0
     missing = False
     months = fmonths.get(symbol, set()) if fmonths is not None else set()
     for mo in _month_range(entry_us, exit_us):
         if mo not in months:
             missing = True
             break
-    ft, fr = fund.get(symbol, (np.empty(0, dtype="int64"), np.empty(0)))
+    rec = fund.get(symbol, (np.empty(0, dtype="int64"), np.empty(0)))
+    ft, fr = rec[0], rec[1]
+    fimp = rec[2] if len(rec) > 2 else None
+    fmkt = rec[3] if len(rec) > 3 else None
+    n_imp = 0
+    n_mkt = 0
     lo = int(np.searchsorted(ft, entry_us, side="right"))
     hi = int(np.searchsorted(ft, exit_us, side="right"))
     total = 0.0
@@ -438,9 +450,16 @@ def funding_for_trade(fund, fmonths, symbol, side, R, entry_us, exit_us, legs_ot
             else:
                 missing = True
                 continue
-        total += w * side * float(fr[k]) * mark
+        if fimp is not None and fimp[k]:
+            total += w * abs(float(fr[k])) * mark
+            n_imp += 1
+            if fmkt is not None and fmkt[k]:
+                n_mkt += 1
+            missing = True
+        else:
+            total += w * side * float(fr[k]) * mark
         cnt += 1
-    return total / R, cnt, missing
+    return total / R, cnt, missing, n_imp, n_mkt
 
 
 def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bias, bi, opp: dict, tick, funding=None, attempts_out=None):
@@ -673,7 +692,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
         arm_close_adverse = False
         pending = None
         tp_done = False
-        legs = []  # (weight, price, fee_rate, leg open_time)
+        legs = []  # (weight, price, fee_rate, leg open_time, slippage paid per unit of price weight = w * raw * slip)
         rem = 1.0
         best = H[jf] if side == 1 else L[jf]
         worst = L[jf] if side == 1 else H[jf]
@@ -686,7 +705,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             o_, h_, l_, c_ = O[j], H[j], L[j], Cl[j]
             if pending is not None and j > jf:
                 p = o_ * (1 - side * slip)
-                legs.append((rem, p, taker, ot[j]))
+                legs.append((rem, p, taker, ot[j], rem * o_ * slip))
                 exit_bar, exit_reason, rem = j, pending, 0.0
                 break
             # extremes (bars the position was alive through, including this bar's range)
@@ -714,7 +733,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                     raw = cur_stop
             if raw is not None:
                 p = raw * (1 - side * slip)
-                legs.append((rem, p, taker, ot[j]))
+                legs.append((rem, p, taker, ot[j], rem * raw * slip))
                 exit_bar, rem = j, 0.0
                 if kind == "initial":
                     exit_reason = "structure_stop"
@@ -736,14 +755,14 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                         raw = o_ if o_ <= tp_price else (tp_price if l_ <= tp_price else None)
                     if raw is not None:
                         p = raw * (1 - side * slip)
-                        legs.append((tp_frac, p, taker, ot[j]))
+                        legs.append((tp_frac, p, taker, ot[j], tp_frac * raw * slip))
                         rem -= tp_frac
                         tp_done = True
                         hit = True
                 if not hit and fix_price is not None:
                     # a resting maker order at the target: filled only when price trades strictly through it, at the target price
                     if (side == 1 and h_ > fix_price) or (side == -1 and l_ < fix_price):
-                        legs.append((rem, fix_price, maker, ot[j]))
+                        legs.append((rem, fix_price, maker, ot[j], 0.0))
                         exit_bar, exit_reason, rem = j, "fixed_r", 0.0
                         break
             # (4) close review
@@ -791,20 +810,22 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             j += 1
         if exit_bar is None:  # data ended while holding
             p = Cl[n_bars - 1] * (1 - side * slip)
-            legs.append((rem, p, taker, ot[n_bars - 1]))
+            legs.append((rem, p, taker, ot[n_bars - 1], rem * Cl[n_bars - 1] * slip))
             exit_bar, exit_reason, rem = n_bars - 1, "end_of_data", 0.0
         gross = 0.0
         fee = p_entry * fee_entry
         wsum = 0.0
         psum = 0.0
-        for w, p, fr, _lt in legs:
+        slip_amt = 0.0 if maker_entry else O[jf] * slip
+        for w, p, fr, _lt, sl in legs:
+            slip_amt += sl
             gross += w * side * (p - p_entry)
             fee += w * p * fr
             wsum += w
             psum += w * p
         gross_r = gross / R
         fee_r = fee / R
-        fund_r, n_fund, fund_missing = funding_for_trade(
+        fund_r, n_fund, fund_missing, n_imp, n_mkt = funding_for_trade(
             fund, fmonths, symbol, side, R, ot[jf], ot[exit_bar], [x[3] for x in legs], [x[0] for x in legs], ot, O, Cl
         )
         att("filled", ot[exit_bar])
@@ -836,6 +857,9 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                 gross_r - fee_r,
                 n_fund,
                 fund_missing,
+                slip_amt / R,
+                n_imp,
+                n_mkt,
             )
         )
     return rows, cnt
@@ -845,7 +869,7 @@ _COLS = [
     "signal_id", "symbol", "tf", "type", "side", "signal_time", "entry_time", "entry_price", "entry_reference",
     "stop_initial", "r_dist", "exit_time", "exit_price", "gross_r", "net_r", "fee_r", "mfe_r", "mae_r",
     "bars_held", "exit_reason", "tp1_hit",
-    "attempt_id", "funding_r", "net_r_ex_funding", "n_funding", "funding_missing",
+    "attempt_id", "funding_r", "net_r_ex_funding", "n_funding", "funding_missing", "slip_r", "n_funding_imputed", "n_funding_market",
 ]
 _ATT_COLS = ["attempt_id", "signal_id", "symbol", "tf", "type", "side", "signal_time", "status", "end_time"]
 _G: dict = {}
