@@ -6,11 +6,19 @@ ChanEdge 是一套自用的量化系統。結構由纏論引擎負責。硬規�
 
 ## 三個階段
 
+本節的 Phase 是產品階段（架構稿 §11），不是 `research/` 的研究階段。研究階段的結論在下一節。
+
 Phase 1 的產品範圍是紙交易、事件回測、稽核日誌，以及把 `ChartFrame` 寫進 SQLite。完成定義在架構稿 §11.1，對照句在實作計畫「做完 Phase 1 的對照」。Phase 1 不送實盤單，不開繪圖埠，不接 Telegram。System One 進場路徑已在樹上，預設 `systemone.enabled` 仍是 false。
 
 Phase 2 從 PR-13 開始，是唯讀圖形監控。畫面只讀已經寫好的幀，不呼叫 `ChanEngine`，沒有下單路由。PR-13 已完成：`chanedge monitor` 啟動另一個行程 `python -m chanedge.monitor`，只綁 `127.0.0.1`，經 `journal/reader.py` 以唯讀連線讀 `chart_frames`，只接受 GET／HEAD。測試在 `tests/monitor/test_reads_frames.py`。
 
 Phase 3 才是 Telegram 與實盤。告警事件與實盤進入條件在 §11.3。組合根遇到 `mode=live` 直接失敗，而且失敗在讀取 API 金鑰之前。倉庫裡沒有可送單的 `execution/live.py`。
+
+## 研究結論（2026-11-05）
+
+這套系統目前不交易。研究用獨立的模擬器（`research/`，import `chanedge`，不改 `src/`）檢查纏論買賣點在扣成本之後有沒有優勢。模擬器與產品回測逐筆對上 5575/5575。結果：研究階段 1 與 1b 共 34 組事先登記的實驗，沒有一組過關卡 A。依停止條件，研究停在 1b，不進樣本外驗證，也不實盤。
+
+這個結論不改本檔與架構稿描述的系統行為。資料管線、撮合、紙交易與日誌照舊可用，日後可以改接其他策略想法。新的策略要另寫事先登記的計畫。判讀與限制見 `docs/research/decision-2026-11-05.md`。
 
 ## 現在樹上有什麼
 

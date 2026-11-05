@@ -18,16 +18,29 @@
 
 規格審查讀架構稿開頭「給審查者」。那一節寫給審文字的人：不要寫程式，不要改倉庫檔案。那裡的「倉庫裡沒有交易程式」是審查說明，不是現在的目錄。
 
-程式審查看 `src/chanedge`，拿實作去對架構稿正文與實作計畫。PR-1 到 PR-12 與 System One 進場路徑已經在樹上。預設旗標仍是關閉。缺模組這件事，只在審規格時不算規格錯誤。
+程式審查看 `src/chanedge`，拿實作去對架構稿正文與實作計畫。PR-1 到 PR-13 與 System One 進場路徑已經在樹上。預設旗標仍是關閉。缺模組這件事，只在審規格時不算規格錯誤。
 
 做法、回覆格式與指令在 [review.md](review.md)。
 
 ## 現況
 
-狀態是 Draft。日期是 2026-10-28。不要把 `approve` 寫進狀態列。
+更新日期 2026-11-05。架構稿與實作計畫的狀態列仍是 Draft。不要把 `approve` 寫進狀態列。
 
-PR-1 到 PR-12 已完成。System One 進場路徑已接入，`systemone.enabled` 預設仍是 false。2026-10-29 程式審查的 18 項與幾個收尾問題已修正。PR-13（唯讀圖形監控）在使用者要求下已完成：`chanedge monitor` 另開行程，只綁 `127.0.0.1`，只讀 `chart_frames`。使用者沒有明確說要做之前，不要加 `execution/live.py`、不要接 Telegram、不要讓監控綁其他位址或加任何寫入路由。不要把 `paper.yaml` 的旗標打開。
+**研究已結案，結論是不交易。** 在這份資料上（Binance USDⓈ-M 成交額前 20 名，樣本內 2024-01-01 → 2025-06-30）找進場優勢，研究階段 1 的 24 組與研究階段 1b 的 10 組事先登記實驗，沒有一組過關卡 A。纏論買賣點當進場，毛 R 全部為負，扣手續費之前就沒有優勢。Donchian 趨勢策略、以及把纏論結構當過濾器，也都沒過。依事先寫好的停止條件，不進研究階段 2（樣本外），不進研究階段 3，不實盤。理由在 [../research/decision-2026-11-05.md](../research/decision-2026-11-05.md)，數字在 `research/out/phase1.md` 與 `research/out/phase1b.md`。
 
-上次在倉庫的 `.venv` 跑完整測試是 277 passed、12.82 秒（Windows）。2026-10-29 修正審查問題並完成 PR-13 之後，在 Linux、Python 3.13 是 303 passed。這些數字只是當時的結果。審查時自己重跑，以終端機輸出為準。
+「階段」有兩套，不要混用：
+
+- 產品 Phase 1／2／3 是架構稿 §11：紙交易 MVP、唯讀圖形監控、Telegram 與實盤。產品 Phase 1 與產品 Phase 2（PR-13）的程式已在樹上。產品 Phase 3 沒有開始。
+- 研究階段 0／1／1b／2／3 在 `research/`：工具驗證、樣本內關卡 A、樣本外關卡 B、之後的完整回測與紙交易驗證。研究停在 1b。
+
+程式：PR-1 到 PR-13 已完成。System One 進場路徑已接入，`systemone.enabled` 預設仍是 false。`chanedge monitor` 另開行程，只綁 `127.0.0.1`，只讀 `chart_frames`。
+
+使用者沒有明確要求之前：
+
+- 不開新實驗，不用 `--oos`，`research/out/oos_log.md` 保持空的。樣本外 2025-07-01 → 2026-10-27 還沒用過，要留著。
+- 不加 `execution/live.py`，不接 Telegram，不打開 `paper.yaml` 的旗標，不讓監控綁其他位址或加寫入路由。
+- 不為了配合研究結論去改架構稿的鎖定句子。研究結論是「這套進場在這份資料上沒有優勢」，不是規格寫錯。
+
+測試：2026-11-05 在 main `5c8c818`、Linux、Python 3.13，`pytest -q` 是 312 passed；`python -m unittest discover -s research/tests -t .` 是 Ran 101 tests OK（要有本機的 `research/cache/` 與 `data/`）。這些數字只是當時的結果。審查時自己重跑，以終端機輸出為準。
 
 沒有使用者要求時不要 commit。

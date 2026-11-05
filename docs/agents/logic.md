@@ -232,7 +232,7 @@ flowchart TD
 
 Phase 1 是紙交易、事件回測、稽核日誌，以及把 `ChartFrame` 寫進 SQLite。不開繪圖埠，不接 Telegram，沒有 `execution/live.py`。`mode=live` 在讀取交易金鑰之前失敗。
 
-Phase 2 是唯讀圖形監控。畫面不呼叫 `ChanEngine`，沒有下單路由。這一步還沒開始。
+Phase 2 是唯讀圖形監控。畫面不呼叫 `ChanEngine`，沒有下單路由。這一步已完成（PR-13）。
 
 Phase 3 才是 Telegram 與實盤。告警只有連續資料過期與 kill switch 狀態變化。JEV 的逾時不進這組告警。它的可見性是報告裡的失敗計數。
 
@@ -245,6 +245,8 @@ Phase 3 才是 Telegram 與實盤。告警只有連續資料過期與 kill switc
 ## 現在樹上已經有的
 
 PR-1 到 PR-12 已完成：設定與 `config_hash`、領域型別、行情與榜單、日誌、纏論引擎與四種信號、六通道、本地 JEV 加權、硬閘門、風險、撮合與回測、CLI、紙交易與重啟。
+
+PR-13 已完成：唯讀圖形監控。`chanedge monitor` 另開行程，只綁 `127.0.0.1`，只讀 `chart_frames`，沒有寫入路由。
 
 System One 路徑已在樹上：領域埠與失敗狀態、`jev/compose.py` 的映射、`typesafe` 的 JSONL 鎖與客戶端、進場預檢、`jev-warm`、回測快取未命中中止、報告計數。預設檔仍是 `systemone.enabled: false`。沒有 overlay 時，跑起來的進場分數仍是 `src/chanedge/jev/model.py` 的本地加權。
 

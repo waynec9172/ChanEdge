@@ -12,8 +12,10 @@ ChanEdge/
   docs/ARCHITECTURE.md    # 行為與數字
   docs/IMPLEMENTATION.md  # 步驟
   docs/agents/            # 本導覽，不是規格
+  docs/research/          # 研究結案決定。判讀與引用，數字以 research/out/ 為準
   src/chanedge/           # 程式
   tests/                  # 測試與 fixtures
+  research/               # 研究工具、事先登記計畫、結果。import chanedge，不改 src/。research/cache/ 在 gitignore。見 research/README.md
   .venv/                  # 本機虛擬環境，不要裝進系統 Python
   data/                   # gitignore。Parquet、SQLite、報告。不一定存在
 ```
