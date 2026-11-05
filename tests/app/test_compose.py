@@ -559,10 +559,26 @@ def test_backtest_command_does_not_sleep(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("chanedge.backtest.loop.time.sleep", fail)
     monkeypatch.setattr("chanedge.app.paper_loop.time.sleep", fail)
     monkeypatch.setattr("chanedge.app.cli.time.sleep", fail)
-    app = _app(tmp_path, settings=_quoted_settings())
+    quoted = _quoted_settings()
+    small = quoted.model_copy(
+        update={"marketdata": quoted.marketdata.model_copy(update={"windows": {"15m": 2, "1h": 1, "4h": 1}})}
+    )
+    app = _app(tmp_path, settings=small)
+    write_universe_file(universe_path(tmp_path, "binanceusdm", DAY), (_member("BTC/USDT", 1),))
+    _store(
+        app,
+        [
+            _candle("BTC/USDT", Timeframe.M15, datetime(2023, 12, 31, 23, 30, tzinfo=UTC)),
+            _candle("BTC/USDT", Timeframe.M15, OLD),
+            _candle("BTC/USDT", Timeframe.M15, T0),
+            _candle("BTC/USDT", Timeframe.H1, H1_OPEN),
+            _candle("BTC/USDT", Timeframe.H4, H4_OPEN),
+        ],
+    )
     result = run_backtest_command(app, vision_root=tmp_path / "vision", end=date(2024, 1, 2))
     assert result.chart_frames == 0
     assert result.synchronous == 0
+    assert len(result.decisions) > 0
 
 
 def test_existing_universe_file_is_not_overwritten(tmp_path: Path, capsys) -> None:
@@ -952,9 +968,11 @@ def test_first_paper_fill_starts_at_the_window_before_now(tmp_path: Path) -> Non
 def test_backtest_warns_when_the_kill_switch_vetoes_every_entry(tmp_path: Path, capsys) -> None:
     clock = _Clock(datetime(2024, 1, 2, 12, tzinfo=UTC))
     base = ["backtest", "--config", str(ROOT / "config" / "default.yaml"), "--root", str(tmp_path), "--end", "2024-01-01"]
-    assert main(base, exchange=_Exchange(), clock=clock, environ=_Boom()) == 0
-    assert "safety.kill_switch is true" in capsys.readouterr().err
+    assert main(base, exchange=_Exchange(), clock=clock, environ=_Boom()) == 1
+    err = capsys.readouterr().err
+    assert "safety.kill_switch is true" in err
+    assert "parquet_root" in err
     other = tmp_path / "with-overlay"
     overlay = [*base[:4], str(other), *base[5:], "--overlay", str(ROOT / "config" / "paper.yaml")]
-    assert main(overlay, exchange=_Exchange(), clock=clock, environ=_Boom()) == 0
+    assert main(overlay, exchange=_Exchange(), clock=clock, environ=_Boom()) == 1
     assert "kill_switch" not in capsys.readouterr().err
