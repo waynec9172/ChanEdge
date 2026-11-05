@@ -1,0 +1,44 @@
+{
+  "name": "p1s1_1h_cur",
+  "description": "S1 1h cur：硬閘門（4h 方向、波動帶），下一根開盤市價，現行近似（反向訊號用訊號週期）",
+  "signals": {
+    "source": "chan",
+    "tf": "1h",
+    "types": [
+      "second_buy",
+      "third_buy",
+      "second_sell",
+      "third_sell"
+    ],
+    "donchian_n": null
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "htf_4h": true,
+    "vol_band": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 0.15,
+    "round_to_tick": true
+  },
+  "exit": {
+    "preset": "current",
+    "opposite_signal": {
+      "enabled": true,
+      "tf": "1h"
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

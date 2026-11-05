@@ -1,0 +1,43 @@
+{
+  "name": "p1s1_15m_opp",
+  "description": "S1 15m opp：硬閘門（4h 方向、波動帶），下一根開盤市價，只有反向訊號",
+  "signals": {
+    "source": "chan",
+    "tf": "15m",
+    "types": [
+      "second_buy",
+      "third_buy",
+      "second_sell",
+      "third_sell"
+    ],
+    "donchian_n": null
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "htf_4h": true,
+    "vol_band": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 0.15,
+    "round_to_tick": true
+  },
+  "exit": {
+    "opposite_signal": {
+      "enabled": true,
+      "tf": "15m"
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

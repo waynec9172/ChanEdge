@@ -1,0 +1,40 @@
+{
+  "name": "p1s1_4h_rat",
+  "description": "S1 4h rat：硬閘門（4h 方向、波動帶），下一根開盤市價，不分批只棘輪（保本 1R + 筆棘輪）",
+  "signals": {
+    "source": "chan",
+    "tf": "4h",
+    "types": [
+      "second_buy",
+      "third_buy",
+      "second_sell",
+      "third_sell"
+    ],
+    "donchian_n": null
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "htf_4h": true,
+    "vol_band": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 0.15,
+    "round_to_tick": true
+  },
+  "exit": {
+    "preset": "ratchet_only"
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

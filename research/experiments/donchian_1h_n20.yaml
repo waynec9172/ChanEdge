@@ -1,0 +1,27 @@
+name: donchian_1h_n20
+description: 基準策略 Donchian 20 突破，1h，停損 2 ATR，出場為同 N 反向突破，前 20 名幣池
+signals:
+  source: donchian
+  tf: 1h
+  types: [dc20_long, dc20_short]
+  donchian_n: 20
+filters:
+  in_top20: true
+  candidate_only: false
+  gate_pass: false
+  jev_min: null
+  max_cost_r: null
+  exclude_reemit: false
+entry:
+  mode: market_next_open
+  limit: {price: signal_close, offset: 0.0, valid_bars: 4}
+  confirm: {bars: 1, require_close_beyond: true}
+stop:
+  buffer_atr: 2.0
+  round_to_tick: true
+exit:
+  opposite_signal: {enabled: true, tf: 1h}
+costs:
+  taker_bps: 5
+  maker_bps: 2
+  slippage_bps: 1

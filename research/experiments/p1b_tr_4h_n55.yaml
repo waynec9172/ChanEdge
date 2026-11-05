@@ -1,0 +1,40 @@
+{
+  "name": "p1b_tr_4h_n55",
+  "description": "1b 純趨勢 4h N=55：收盤突破，初始停損 2 ATR，反向 27 通道突破出場，前 20 名，下架規則",
+  "signals": {
+    "source": "donchian",
+    "tf": "4h",
+    "types": [
+      "dc55_long",
+      "dc55_short"
+    ],
+    "donchian_n": 55
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": null,
+    "exclude_reemit": false,
+    "delist_rule": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 2.0,
+    "round_to_tick": true
+  },
+  "exit": {
+    "donchian_exit": {
+      "enabled": true,
+      "n": 27
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}
