@@ -94,6 +94,10 @@ def _exit_label(cfg: SimConfig, raw_exit: dict) -> str:
             parts.append("opp")
         elif k == "donchian_exit":
             parts.append(f"dcx{v['n']}")
+        elif k == "time_barrier":
+            parts.append(f"tb{v['bars']}")
+        elif k == "row_target":
+            parts.append("tp2")
         else:
             parts.append(k)
     return "+".join(parts) or "none"
@@ -142,6 +146,10 @@ def summarize(cfg: SimConfig, raw_exit: dict) -> str:
     ex = _exit_label(cfg, raw_exit)
     sg = cfg.signals
     n = f" n={sg['donchian_n']}" if sg["donchian_n"] else ""
+    if sg["source"] == "ict":
+        from research.ict import params as ict_params
+
+        n += f" ict={ict_params.table_key(sg['ict'])}"
     return (
         f"src={sg['source']} tf={sg['tf']}{n} types={len(sg['types'])} filt={','.join(filt) or 'none'} "
         f"entry={mode} stop={cfg.stop['buffer_atr']}atr exit={ex}"
