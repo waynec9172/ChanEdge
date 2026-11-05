@@ -260,3 +260,8 @@ OOS 期間為 2025-07-01 → 2026-10-27，對每個晉級候選只算一次，�
 
 ### 修訂 A2（2026-11-05；P2 S0 完成，任何 ICT 實驗執行前）
 A1.2 調查結案：(a)(b)(c)(d) 全部 True。9 個舊實驗的 IS 列（trades/attempts）逐欄完全相同；OOS 差異只在 `龙虾/USDT` 2026-10 一筆或兩筆的資金費相關欄位（donchian：net_r、funding_r、funding_missing、n_funding_imputed，且 Δnet_r = −Δfunding_r；p1s1_15m_*：只有 funding_missing），都屬 dc5f54a 補下載的資金費資料。調查全程沒有輸出任何 OOS 損益數值。依 A1.2 不重跑、不覆寫；這 9 個列入「已知 OOS 資金費漂移」白名單。明細見 `research/out/ict_legacy_mismatch.md`。
+
+### 修訂 A3（2026-11-05；P2 IS 結果）
+S1：ict_L7 + 4 個鄰居已跑完，關卡 A′ **FAIL**（v2 182 筆，淨 R −0.058，PF 0.80，6 季中 2 季為正，4 個鄰居全負，bootstrap 下界 −0.126；空 +0.052（61 筆）、多 −0.113）。依 A1.3 S2（使用者已預先同意），其餘 18 個實驗一次跑完：19 個全部 FAIL，ict_rand 也 FAIL（沒有紅旗），晉級候選 0 個。
+結論：**H-ICT 未通過**。依 A1.3 第 6 點，0 個候選 → 不看 OOS，`oos_log.md` 保持 0 bytes。預算使用 55/60（rsv1–5 未啟用）。完整表見 `research/out/ict_gate_aprime.md`。
+已知：test_g07、T08Audit、test_b1 這 3 個測試寫死「registry 還沒有 ICT 列」時的快照，S1 之後必然失敗，屬預期，不代表有程式錯誤。
