@@ -570,6 +570,131 @@ def audit() -> int:
     return 0 if not problems else 1
 
 
+MARK = "<!-- generated above; hand-written notes below -->"
+
+
+def final(promote: str | None, out: str | None) -> int:
+    """Plan 6.3: assemble phase1b.md from in-sample results only (no new experiments, no --oos)."""
+    import re
+    man = load_manifest()
+    rows = [r for r in man["run"] if exists_result(r["name"])]
+    names = [r["name"] for r in rows]
+    v2 = {n: v2_summary(n) for n in names}
+    ind = {n: ind_summary(n) for n in names}
+    ok = {}
+    for n in names:
+        nbv = neighbor_values(n)
+        ok[n] = (M.gate_a(v2[n], nbv), M.gate_a(ind[n], nbv))
+    passed = [n for n in sorted(names, key=lambda x: -v2[x]["net_r"]) if ok[n][0]["pass"]]
+    cnt = len(passed)
+    if promote and Path(promote).exists():
+        m = re.findall(r"PASS_A_COUNT: *([0-9]+)", Path(promote).read_text())
+        if m and int(m[-1]) != cnt:
+            print(f"MISMATCH PASS_A_COUNT promote={m[-1]} computed={cnt}")
+            return 1
+    reg = R.read_registry(C.OUT / "registry.md")
+    n_main = sum(1 for n in reg if R.NB_MARK not in n)
+    n_nb = sum(1 for n in reg if R.NB_MARK in n)
+    n1b = sum(1 for n in reg if n.startswith("p1b_") and R.NB_MARK not in n)
+    best = max(names, key=lambda x: v2[x]["net_r"])
+    b = v2[best]
+    nbv = neighbor_values(best)
+    e = M.eligibility(b, None)
+    nbtxt = "未觸發（P1/P2 不成立）" if not (e["P1"] and e["P2"]) else ("全正" if nbv and all(x > 0 for x in nbv) else "有負")
+    ob = {k: v2_summary(o) for k, o in OLD_BASE.items()}
+    bs = {k: v2[k] for k in OLD_BASE}
+    gp = lambda n: "過" if ok[n][0]["pass"] else "不過"
+    d = {}
+    for r in rows:
+        if r["control"]:
+            d[r["name"]] = filter_delta(v2[r["name"]], v2[r["control"]], ind[r["name"]], ind[r["control"]])["delta"]
+    sgn = lambda x: f"{x:+.4f}"
+    head = [
+        "結論：" + ("無候選（10 組事先登記實驗都沒過關卡 A）；建議停止在這份資料上尋找進場優勢" if cnt == 0 else f"有候選（{cnt} 組過關卡 A：{', '.join(passed)}）；只回報，等使用者決定是否進入階段 2"),
+        f"最佳組 {best}（v2）：淨 R {sgn(b['net_r'])}、PF {b['pf']:.3f}、筆數 {b['n']}、正季 {ok[best][0]['pos_q'][0]}/6、手續費×1.5 淨 R {sgn(ok[best][0]['fee15'][0])}、鄰居 {nbtxt}",
+        f"基準重算（v2，下架規則）：1h n20 淨 R {sgn(bs['p1b_base_1h_n20']['net_r'])}、PF {bs['p1b_base_1h_n20']['pf']:.3f}、筆數 {bs['p1b_base_1h_n20']['n']}；4h n55 淨 R {sgn(bs['p1b_base_4h_n55']['net_r'])}、PF {bs['p1b_base_4h_n55']['pf']:.3f}、筆數 {bs['p1b_base_4h_n55']['n']}"
+        f"（舊規則 1h {sgn(ob['p1b_base_1h_n20']['net_r'])}、4h {sgn(ob['p1b_base_4h_n55']['net_r'])}）；關卡 A：1h {gp('p1b_base_1h_n20')}、4h {gp('p1b_base_4h_n55')}",
+        f"纏論過濾淨 R 差（v2，參考，不是關卡）：1h n20 方向 Δ{sgn(d['p1b_base_1h_n20_bias'])}、中樞外 Δ{sgn(d['p1b_base_1h_n20_nozs'])}；4h n55 方向 Δ{sgn(d['p1b_base_4h_n55_bias'])}、中樞外 Δ{sgn(d['p1b_base_4h_n55_nozs'])}",
+        f"實驗用量：主實驗 {n_main} / 60（階段 0：2、階段 1：24、階段 1b：{n1b}）、鄰居 {n_nb} 個（不計）；oos_log.md 為空；未使用 --oos；未開始階段 2",
+    ]
+    L = head + [""]
+    L += ["# Phase 1b 結果與結論（只含樣本內；v2 = 每幣同時最多一筆）", ""]
+    L += ["## 1. 範圍", "",
+          "- 只用樣本內（2024-01-01 → 2025-06-30），沒有使用 --oos，`oos_log.md` 為空；關卡 A 全部以 v2 為準，獨立版另列。",
+          "- 下架規則（裁決 1793825540）：15m 平線 K（high=low=close 且 volume=0）連續 ≥ 96 根為一段；段內訊號剔除、不能成交進場；持倉在下架點收盤以 taker 加 3 倍滑價強制平倉（`delisted`）。",
+          "- 資金費修正：4 個非 ASCII 幣名（币安人生、我踏马来了、牛来、龙虾）2026-10 的月檔以 URL percent-encode 重新下載成功，補值邏輯不變。",
+          "- 重新上架（裁決選項 A）：只禁平線期間，重新上架後照常產生訊號與進場。", ""]
+    tab = C.OUT / "phase1b_run.md"
+    tmp = Path("/tmp/_p1b_tab.md")
+    table(str(tmp))
+    tabtxt = tmp.read_text()
+    sec = {}
+    cur = None
+    for ln in tabtxt.splitlines():
+        if ln.startswith("## "):
+            cur = ln[3:]
+            sec[cur] = []
+        elif cur:
+            sec[cur].append(ln)
+    L += ["## 2. 完整 v2 表（淨 R、毛 R、手續費 R、funding_r、PF、筆數）", ""] + sec["v2 主表（每幣最多一筆）"] + ["", "### 獨立版（參考，另列）", ""] + sec["獨立版主表"] + [""]
+    L += ["### v2 多空與分群（n / 淨R；僅報告）", ""] + sec["v2 多空與分群（n / 淨R）"] + [""]
+    L += ["## 3. 關卡 A（v2 為準；獨立版另列，兩版不同的格標 ※）", "",
+          "| 實驗 | 版本 | 淨R≥+0.08 | PF≥1.2 | n≥500 | 正季≥70%（≥5/6） | ×1.5淨R>0 | 鄰居同號 | 通過 |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    ck = lambda g, k: "✓" if g[k][1] else "✗"
+    for n in names:
+        g2, gi = ok[n]
+        e2 = M.eligibility(v2[n], None)
+        nbs = "未觸發（P1/P2 不成立）✗" if not (e2["P1"] and e2["P2"]) else ("全正 ✓" if g2["neighbors"][1] else "有負 ✗")
+        for lab, g, s_ in (("v2", g2, v2[n]), ("獨立", gi, ind[n])):
+            diff = lambda k: " ※" if lab == "獨立" and g[k][1] != g2[k][1] else ""
+            L.append(f"| {n} | {lab} | {s_['net_r']:+.4f} {ck(g, 'net_r')}{diff('net_r')} | {s_['pf']:.3f} {ck(g, 'pf')}{diff('pf')} | {s_['n']} {ck(g, 'n')}{diff('n')} | {g['pos_q'][0]}/6 {ck(g, 'pos_q')}{diff('pos_q')} | {g['fee15'][0]:+.4f} {ck(g, 'fee15')}{diff('fee15')} | {nbs} | {g['pass']} |")
+    L += ["", "鄰居（只有同時 P1、P2 成立的組才跑；不計名額）：", ""] + sec["鄰居（v2 n / 淨R / 毛R）"] + [""]
+    if passed:
+        L += ["### 通過關卡 A 的組（每條門檻實際數字）", ""]
+        for n in passed:
+            g = ok[n][0]
+            L.append(f"- {n}：淨 R {g['net_r'][0]:+.4f}、PF {g['pf'][0]:.3f}、筆數 {g['n'][0]}、正季 {g['pos_q'][0]}/6、×1.5 淨 R {g['fee15'][0]:+.4f}、鄰居 {neighbor_values(n)}")
+    else:
+        L += ["通過關卡 A 的組：無（0 組），所以沒有「每條門檻實際數字」要另列；10 組的實際數字見上表。", ""]
+    L += ["## 4. 纏論過濾淨 R 差（參考，不是關卡）", ""] + sec["纏論過濾淨 R 差（v2，參考，不是關卡；Δ = 過濾組 − 對照組）"] + [""]
+    L += ["## 5. 下架規則與資金費修正的影響", "",
+          "兩組基準新舊並排（v2；舊 = 階段 1 無下架規則）：", "", "| 組 | 規則 | n | 淨R | 毛R | PF | 正季 |", "| --- | --- | --- | --- | --- | --- | --- |"]
+    for k, o in OLD_BASE.items():
+        for lab, s_ in (("新（v2）", v2[k]), ("舊（v2）", ob[k]), ("新（獨立）", ind[k]), ("舊（獨立）", ind_summary(o))):
+            L.append(f"| {k} | {lab} | {s_['n']} | {s_['net_r']:+.4f} | {s_['gross_r']:+.4f} | {s_['pf']:.3f} | {sum(1 for q in s_['quarters'] if q['sum'] > 0)}/6 |")
+    L += ["", "下架剔除訊號數與 delisted 出場筆數：", ""] + sec["下架剔除與中樞過濾說明"] + ["", "`harness_validation_delist.md` 前 5 行：", "", "```"]
+    L += (C.OUT / "harness_validation_delist.md").read_text().splitlines()[:5] + ["```", ""]
+    L += ["## 6. 停止條件判讀", "", "使用者原文：", "",
+          "> - 12 組裡沒有任何一組過關卡 A：寫 research/out/phase1b.md 的「無候選」結論，並明確建議停止在這份資料上尋找進場優勢。",
+          "> - 有組過 A：只停下來回報，等使用者決定是否進入階段 2。不要自動進入。", ""]
+    if cnt == 0:
+        L += [f"本階段 10 組事先登記的主實驗（另有 4 個鄰居，不計名額）v2 都沒有通過關卡 A（PASS_A_COUNT: {cnt}）。**無候選。**", "",
+              "**建議停止在這份資料上尋找進場優勢。** ChanEdge 的資料管線、撮合、紙交易與日誌可以保留，改接其他策略想法。", ""]
+    else:
+        L += [f"PASS_A_COUNT: {cnt}。只回報，等使用者決定是否進入階段 2；未開始階段 2。", ""]
+    L += ["**過了 A、沒過 B 的停止條件（事先登記，供階段 2 使用；使用者原文）：**", "",
+          "> 若某組在樣本內通過關卡 A，但在樣本外（2025-07-01 → 2026-10-27）沒通過關卡 B：",
+          "> 1. 該組判定不成立，不得因為樣本外結果修改它的任何參數再重跑。",
+          "> 2. 樣本外這段資料視為已用掉。之後任何新設定或新策略都不能再用這段資料當驗證依據，只能當樣本內的一部分。",
+          "> 3. 下一輪的樣本外，只能用 2026-10-28 之後新產生的資料，也就是往後的紙交易或前推資料。至少累積 ≥ 300 筆或 ≥ 6 個月再判定，以先到者為準。",
+          "> 4. 要寫一份 decision 文件，記錄樣本內和樣本外的數字並排比較，以及「樣本外已用掉」這件事。",
+          "> 5. 這種情況下不准進入階段 3。", ""]
+    L += ["## 7. 注意事項", "",
+          "- E7：反向通道取 `n // 2`（20→10、55→27、16→8、24→12）。",
+          "- E9：纏論過濾組沿用基準的出場（同 N 反向突破 + 2 ATR 停損），對照組是新規則重算的基準。",
+          "- E11：中樞 = 同一 4h snapshot 最新的中樞，`zd ≤ close ≤ zg` 視為在區間內；沒有中樞而通過的筆數：1h n20 nozs 222、4h n55 nozs 0（v2 已成交）。",
+          "- E12：1d K 以 UTC 日切；不滿 96 根 15m 的日子 431 天（其中序列中段 8 天）。",
+          "- 重新上架（選項 A）影響筆數（IS，重新上架後進場；選項 B 會剔除）：1h n20 v2 AERGO 4 筆 / +5.4459R、CTK 1 筆 / +1.5493R；獨立 AERGO 12 / +5.6219R、CTK 1 / +1.5493R；4h n55 AERGO 1 筆 / −0.7589R（v2、獨立相同）。post-hoc 統計，未據此改設定。",
+          "- `net_slip3` 在 delisted 腿是近似（該腿本身已用 3 倍滑價）。",
+          "- 備用 2 組未使用。",
+          "- 往後階段的新實驗也必須開 `filters.delist_rule: true`（裁決 E1）。",
+          f"- 沒有任何一組 v2 淨 R ≥ +0.5，不需要「疑似錯誤」抽查。獨立版 p1b_tr_4h_n55 的 +0.0894 來自同幣重疊持倉（13 筆 > 20R 的單合計 +562R），v2 為 −0.0302；以 v2 為準。", "",
+          MARK, "## 執行者備註", "", "（無）", ""]
+    L += ["## 8. 全部表（`phase1b table` 內容）", "", tabtxt.rstrip(), ""]
+    Path(out or C.OUT / "phase1b.md").write_text("\n".join(L))
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="research.phase1b")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -610,7 +735,7 @@ def main(argv=None) -> int:
     if a.cmd == "relist-report":
         return relist_report()
     if a.cmd == "final":
-        raise SystemExit("final belongs to the final stage (plan 6.3); not implemented in prep")
+        return final(a.promote, a.out)
     return audit()
 
 
