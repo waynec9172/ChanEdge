@@ -59,16 +59,41 @@ EXPERIMENTS: tuple = (
     ("ict_rsv4", "reserved", "預留"),
     ("ict_rsv5", "reserved", "預留"),
 )
-NEIGHBORS: tuple = (
-    ("ict_L7__nb_fvgk_0p4", "signals.ict.fvg_k = 0.4"),
-    ("ict_L7__nb_fvgk_0p6", "signals.ict.fvg_k = 0.6"),
-    ("ict_L7__nb_sl_0p2", "stop.buffer_atr = 0.2"),
-    ("ict_L7__nb_sl_0p4", "stop.buffer_atr = 0.4"),
-)
 RANDOM_SEED = 20261105
 
 
+NB_SPECS = {  # suffix after "__nb_" -> (kind, value, description text)
+    "fvgk_0p4": ("fvg_k", 0.4, "signals.ict.fvg_k = 0.4"),
+    "fvgk_0p6": ("fvg_k", 0.6, "signals.ict.fvg_k = 0.6"),
+    "sl_0p2": ("buffer_atr", 0.2, "stop.buffer_atr = 0.2"),
+    "sl_0p4": ("buffer_atr", 0.4, "stop.buffer_atr = 0.4"),
+}
+NB_MARK = "__nb_"
+
+
+NEIGHBORS: tuple = tuple((f"ict_L7{NB_MARK}{k}", v[2]) for k, v in NB_SPECS.items())  # the 4 registered neighbours of ict_L7
+
+
+def neighbor_names(base: str) -> list:
+    return [f"{base}{NB_MARK}{k}" for k in NB_SPECS]
+
+
+def _split_nb(name: str):
+    if NB_MARK not in name:
+        return name, None
+    base, suf = name.split(NB_MARK, 1)
+    if suf not in NB_SPECS:
+        raise KeyError(name)
+    return base, NB_SPECS[suf]
+
+
 def ict_params(name: str) -> dict:
+    base, nb = _split_nb(name)
+    if nb is not None:
+        d = dict(ict_params(base))
+        if nb[0] == "fvg_k":
+            d["fvg_k"] = nb[1]
+        return IP.validate(d)
     d = dict(IP.DEFAULTS)
 
     def ladder(n):
@@ -83,7 +108,7 @@ def ict_params(name: str) -> dict:
            "ict_loo_sweep": "use_sweep", "ict_loo_session": "use_session"}
     if name in loo:
         d[loo[name]] = False
-    elif name in ("ict_x_trail", "ict_x_notb", "ict_L7__nb_sl_0p2", "ict_L7__nb_sl_0p4"):
+    elif name in ("ict_x_trail", "ict_x_notb"):
         pass
     elif name == "ict_rand":
         d["random"] = {"seed": RANDOM_SEED, "match": "ict_L7"}
@@ -91,34 +116,33 @@ def ict_params(name: str) -> dict:
         d["anchor"] = "confirmed"
     elif name == "ict_setup15m":
         d["setup_tf"] = "15m"
-    elif name == "ict_L7__nb_fvgk_0p4":
-        d["fvg_k"] = 0.4
-    elif name == "ict_L7__nb_fvgk_0p6":
-        d["fvg_k"] = 0.6
     else:
         raise KeyError(name)
     return IP.validate(d)
 
 
 def experiment_dict(name: str) -> dict:
+    base, nb = _split_nb(name)
+    if nb is not None:
+        d = experiment_dict(base)
+        d["name"] = name
+        d["description"] = f"NEIGHBOR of {base}: {nb[2]}"
+        d["signals"] = {**d["signals"], "ict": ict_params(name)}
+        if nb[0] == "buffer_atr":
+            d["stop"] = {**d["stop"], "buffer_atr": nb[1]}
+        return d
     ex = {
         "tp1": {"enabled": True, "fraction": 0.5, "target": "r", "r_fallback": 1.5},
         "breakeven": {"enabled": True, "arm_r": 1.5},
         "row_target": {"enabled": True},
         "time_barrier": {"enabled": True, "bars": 12, "min_r": 0.5},
     }
-    buffer = 0.3
     desc = dict((n, t) for n, _, t in EXPERIMENTS)
-    desc.update((n, f"NEIGHBOR of ict_L7: {t}") for n, t in NEIGHBORS)
     if name == "ict_x_trail":
         del ex["row_target"]
         ex["ratchet"] = {"enabled": True}
     elif name == "ict_x_notb":
         del ex["time_barrier"]
-    elif name == "ict_L7__nb_sl_0p2":
-        buffer = 0.2
-    elif name == "ict_L7__nb_sl_0p4":
-        buffer = 0.4
     return {
         "name": name,
         "description": desc[name],
@@ -128,7 +152,7 @@ def experiment_dict(name: str) -> dict:
             "exclude_reemit": False, "delist_rule": True, "exclude_tradfi": True,
         },
         "entry": {"mode": "market_next_open"},
-        "stop": {"buffer_atr": buffer, "round_to_tick": True},
+        "stop": {"buffer_atr": 0.3, "round_to_tick": True},
         "exit": ex,
         "costs": {"taker_bps": 5, "maker_bps": 2, "slippage_bps": 1},
     }
@@ -714,6 +738,73 @@ def count(workers: int, out: Path, names=LADDER + ("ict_setup15m",), rebuild: bo
     return 0
 
 
+# ----------------------------------------------------------------------------------------------- P2 S0: YAML + manifest
+ICT_EXP_DIR = C.EXPERIMENTS / "ict"
+ICT_NB_DIR = ICT_EXP_DIR / "neighbors"
+ICT_MANIFEST = ICT_EXP_DIR / "ict_manifest.json"
+
+
+def _dump(d: dict) -> str:
+    return json.dumps(d, indent=2, ensure_ascii=False) + "\n"
+
+
+def registered_names() -> list:
+    """The 19 registered main experiments in plan section 5 order (ict_rsv1-5 are never generated)."""
+    return [n for n, kind, _ in EXPERIMENTS if kind != "reserved"]
+
+
+def manifest_dict() -> dict:
+    from research import run as R
+    from research.sim import SimConfig
+
+    def row(n):
+        d = experiment_dict(n)
+        return {"name": n, "kind": next((k for m, k, _ in EXPERIMENTS if m == n), "neighbor"), "table_key": IP.table_key(d["signals"]["ict"]),
+                "config_sha": R.config_sha(SimConfig.from_dict(d).resolved())}
+
+    mains = registered_names()
+    nbs = neighbor_names("ict_L7")
+    return {
+        "plan": "research/plans/ict_phase1.md",
+        "ict_version": IP.ICT_VERSION,
+        "run": [row(n) for n in mains],
+        "neighbors": {"ict_L7": [row(n) for n in nbs]},
+        "reserved": [n for n, kind, _ in EXPERIMENTS if kind == "reserved"],
+        "order": {"S1": ["ict_L7"] + nbs, "S2": [n for n in mains if n != "ict_L7"]},
+    }
+
+
+def planned_files(extra_neighbors_of: tuple = ()) -> dict:
+    """path -> text of every file `gen` owns."""
+    files = {ICT_EXP_DIR / f"{n}.yaml": _dump(experiment_dict(n)) for n in registered_names()}
+    for base in ("ict_L7",) + tuple(extra_neighbors_of):
+        if base == "ict_rand" or base not in registered_names():
+            raise SystemExit(f"neighbours are not defined for {base!r}")
+        for n in neighbor_names(base):
+            files[ICT_NB_DIR / f"{n}.yaml"] = _dump(experiment_dict(n))
+    files[ICT_MANIFEST] = _dump(manifest_dict())
+    return files
+
+
+def gen(check: bool = False, extra_neighbors_of: tuple = ()) -> int:
+    files = planned_files(extra_neighbors_of)
+    bad = [p for p, t in files.items() if not p.exists() or p.read_text() != t]
+    if check:
+        for p in bad:
+            print("GEN MISMATCH", p)
+        print(f"GEN CHECK {'OK' if not bad else 'FAIL'}: {len(files)} files")
+        return 0 if not bad else 1
+    for p in bad:
+        if p.exists():
+            print("refusing to overwrite a different existing file:", p, file=sys.stderr)
+            return 2
+    for p in bad:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(files[p])
+    print(f"GEN wrote {len(bad)} new files, {len(files) - len(bad)} already identical")
+    return 0
+
+
 def _all_params() -> list:
     out = {}
     for n, kind, _ in EXPERIMENTS:
@@ -743,12 +834,17 @@ def main(argv=None) -> int:
     c.add_argument("--workers", type=int, default=6)
     c.add_argument("--out", default=str(C.OUT / "ict_funnel.md"))
     c.add_argument("--rebuild", action="store_true")
+    gp = sub.add_parser("gen", help="write the 19 registered YAMLs + 4 ict_L7 neighbours + manifest (never overwrites)")
+    gp.add_argument("--check", action="store_true", help="only verify the files on disk equal what gen would write")
+    gp.add_argument("--neighbors-of", action="append", default=[], metavar="NAME", help="also write the 4 neighbours of another registered experiment (A1.3 step 3)")
     k = sub.add_parser("key")
     k.add_argument("--exp", required=True)
     a = ap.parse_args(argv)
     if a.cmd == "key":
         print(IP.table_key(ict_params(a.exp)))
         return 0
+    if a.cmd == "gen":
+        return gen(a.check, tuple(a.neighbors_of))
     if a.cmd == "count":
         return count(a.workers, Path(a.out), rebuild=a.rebuild)
     if a.all:

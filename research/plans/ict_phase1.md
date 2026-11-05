@@ -257,3 +257,6 @@ OOS 期間為 2025-07-01 → 2026-10-27，對每個晉級候選只算一次，�
    0 個候選時不看 OOS，`oos_log.md` 保持 0 bytes。
 
 > 備註（2026-11-05）：使用者已指示「跟 Claude 討論後直接進行下一步，之後都這樣」，視為同意 A1.3 第 3 點的 S2。OOS 授權仍須使用者本人書面確認。
+
+### 修訂 A2（2026-11-05；P2 S0 完成，任何 ICT 實驗執行前）
+A1.2 調查結案：(a)(b)(c)(d) 全部 True。9 個舊實驗的 IS 列（trades/attempts）逐欄完全相同；OOS 差異只在 `龙虾/USDT` 2026-10 一筆或兩筆的資金費相關欄位（donchian：net_r、funding_r、funding_missing、n_funding_imputed，且 Δnet_r = −Δfunding_r；p1s1_15m_*：只有 funding_missing），都屬 dc5f54a 補下載的資金費資料。調查全程沒有輸出任何 OOS 損益數值。依 A1.2 不重跑、不覆寫；這 9 個列入「已知 OOS 資金費漂移」白名單。明細見 `research/out/ict_legacy_mismatch.md`。

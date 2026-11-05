@@ -32,14 +32,18 @@ def _priority(typ: str) -> int:
     return 0 if str(typ).startswith("third_") else 1
 
 
-def one_per_symbol(attempts: pd.DataFrame, trades: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def one_per_symbol(attempts: pd.DataFrame, trades: pd.DataFrame, cooldown_us: int = 0) -> tuple[pd.DataFrame, pd.DataFrame]:
     """v2: a symbol holds at most one position/order at a time (plan 3.7).
 
     Occupying attempts (filled / unfilled / abandoned) of one symbol are walked in signal_time order. Several attempts at
     the same time: long and short both present -> all skipped; same side -> third_* beats second_*, then smallest signal_id.
-    An attempt is taken only if signal_time > busy_until (strict); then busy_until = its end_time.
+    An attempt is taken only if signal_time > busy_until (strict); then busy_until = its end_time + cooldown_us (microseconds,
+    default 0 = the original behaviour; ICT gate A' uses 4h = 14_400_000_000).
     Returns (trades_v2, attempts_v2). Out-of-sample rows are ignored.
     """
+    if cooldown_us < 0:
+        raise ValueError("cooldown_us must be >= 0")
+    cool = pd.Timedelta(microseconds=int(cooldown_us))
     a = attempts[(attempts["sample"] == "IS") & attempts["status"].isin(OCCUPY)]
     keep: list[int] = []
     for _sym, g in a.groupby("symbol", sort=False):
@@ -52,7 +56,7 @@ def one_per_symbol(attempts: pd.DataFrame, trades: pd.DataFrame) -> tuple[pd.Dat
                 continue
             pick = min(grp.itertuples(), key=lambda r: (_priority(r.type), r.signal_id))
             keep.append(int(pick.attempt_id))
-            busy = pick.end_time
+            busy = pick.end_time + cool if cooldown_us else pick.end_time
     att2 = a[a["attempt_id"].isin(keep)].sort_values("attempt_id", kind="stable").reset_index(drop=True)
     tr = trades[(trades["sample"] == "IS") & trades["attempt_id"].isin(att2.loc[att2["status"] == "filled", "attempt_id"])]
     return tr.reset_index(drop=True), att2

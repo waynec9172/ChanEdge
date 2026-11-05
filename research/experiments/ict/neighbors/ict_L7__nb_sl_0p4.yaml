@@ -1,0 +1,87 @@
+{
+  "name": "ict_L7__nb_sl_0p4",
+  "description": "NEIGHBOR of ict_L7: stop.buffer_atr = 0.4",
+  "signals": {
+    "source": "ict",
+    "tf": "15m",
+    "types": [
+      "ict_long",
+      "ict_short"
+    ],
+    "donchian_n": null,
+    "ict": {
+      "version": "ict-p1.0",
+      "setup_tf": "1h",
+      "swing_n": 2,
+      "atr_n": 14,
+      "fvg_k": 0.5,
+      "ote_lo": 0.618,
+      "ote_hi": 0.786,
+      "anchor": "causal",
+      "tp2_ext": 0.618,
+      "zone_valid_bars": 24,
+      "use_htf": true,
+      "htf_ema": 50,
+      "use_expansion": true,
+      "exp_tr_atr": 1.5,
+      "exp_vol_mult": 1.5,
+      "exp_vol_n": 20,
+      "use_fresh": true,
+      "use_ltf": true,
+      "ltf_bars": 16,
+      "wick_frac": 0.5,
+      "use_sweep": true,
+      "sweep_bars": 24,
+      "use_session": true,
+      "session_start_h": 7,
+      "session_end_h": 21,
+      "weekdays_only": true,
+      "use_funding": true,
+      "funding_block": 0.0005,
+      "warmup_until": "2024-01-15",
+      "random": null
+    }
+  },
+  "filters": {
+    "in_top20": true,
+    "candidate_only": false,
+    "gate_pass": false,
+    "jev_min": null,
+    "max_cost_r": 0.4,
+    "exclude_reemit": false,
+    "delist_rule": true,
+    "exclude_tradfi": true
+  },
+  "entry": {
+    "mode": "market_next_open"
+  },
+  "stop": {
+    "buffer_atr": 0.4,
+    "round_to_tick": true
+  },
+  "exit": {
+    "tp1": {
+      "enabled": true,
+      "fraction": 0.5,
+      "target": "r",
+      "r_fallback": 1.5
+    },
+    "breakeven": {
+      "enabled": true,
+      "arm_r": 1.5
+    },
+    "row_target": {
+      "enabled": true
+    },
+    "time_barrier": {
+      "enabled": true,
+      "bars": 12,
+      "min_r": 0.5
+    }
+  },
+  "costs": {
+    "taker_bps": 5,
+    "maker_bps": 2,
+    "slippage_bps": 1
+  }
+}

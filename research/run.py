@@ -168,7 +168,9 @@ def compute(cfg: SimConfig, workers: int):
 
 
 def compare_frames(old: pd.DataFrame, new: pd.DataFrame) -> tuple[bool, float, str]:
-    """(equal, max_abs_diff, note). Only columns both frames have are compared; numeric tolerance 1e-9."""
+    """(equal, max_abs_diff, note). Only columns both frames have are compared; numeric tolerance 1e-9.
+
+    Every differing column is listed in the note (it no longer stops at the first one)."""
     if len(old) != len(new):
         return False, float("nan"), f"row count {len(old)} != {len(new)}"
     old = old.copy()
@@ -184,21 +186,29 @@ def compare_frames(old: pd.DataFrame, new: pd.DataFrame) -> tuple[bool, float, s
     old = old.sort_values(keys, kind="stable").reset_index(drop=True)
     new = new.sort_values(keys, kind="stable").reset_index(drop=True)
     worst = 0.0
+    diffs: list[str] = []
+    nan_seen = False
     for c in [c for c in old.columns if c in new.columns]:
         a, b = old[c], new[c]
         if pd.api.types.is_float_dtype(a) or pd.api.types.is_integer_dtype(a) and not pd.api.types.is_bool_dtype(a):
             av, bv = a.to_numpy(float), b.to_numpy(float)
             both_nan = np.isnan(av) & np.isnan(bv)
             d = np.where(both_nan, 0.0, np.abs(av - bv))
-            m = float(np.nanmax(d)) if len(d) else 0.0
             if np.isnan(d).any():
-                return False, float("nan"), f"column {c}: NaN mismatch"
-            worst = max(worst, m)
+                diffs.append(f"column {c}: NaN mismatch")
+                nan_seen = True
+                continue
+            m = float(np.max(d)) if len(d) else 0.0
             if m > 1e-9:
-                return False, worst, f"column {c}: max abs diff {m:.3e}"
+                diffs.append(f"column {c}: max abs diff {m:.3e}")
+            worst = max(worst, m)
         else:
             if not (a.astype(object).fillna("<na>").to_numpy() == b.astype(object).fillna("<na>").to_numpy()).all():
-                return False, worst, f"column {c}: values differ"
+                diffs.append(f"column {c}: values differ")
+    if nan_seen:
+        worst = float("nan")
+    if diffs:
+        return False, worst, f"{len(diffs)} column(s) differ: " + "; ".join(diffs)
     return True, worst, ""
 
 
