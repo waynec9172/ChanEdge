@@ -8,6 +8,7 @@ No account, no position cap. Matching order per 15m bar mirrors backtest/matcher
 from __future__ import annotations
 
 import copy
+import json
 import math
 from bisect import bisect_left
 from dataclasses import dataclass, field
@@ -120,9 +121,11 @@ class SimConfig:
         _expect("experiment", "name", d["name"], "str")
         _expect("experiment", "description", d["description"], "str")
         sig = d["signals"]
-        _check_keys("signals", sig, {"source", "tf", "types", "donchian_n"})
-        if sig["source"] not in ("chan", "donchian"):
-            raise ConfigError("signals.source must be chan or donchian")
+        _check_keys("signals", sig, {"source", "tf", "types", "donchian_n", "ict"}, {"source", "tf", "types", "donchian_n"})
+        if sig["source"] not in ("chan", "donchian", "ict"):
+            raise ConfigError("signals.source must be chan, donchian or ict")
+        if "ict" in sig and sig["source"] != "ict":
+            raise ConfigError("signals.ict exists for ict signals only")
         if sig["tf"] not in C.TFS and not (sig["tf"] == "1d" and sig["source"] == "donchian"):
             raise ConfigError("signals.tf must be 15m, 1h or 4h (1d for donchian only)")
         if not isinstance(sig["types"], list) or not all(isinstance(x, str) for x in sig["types"]):
@@ -133,6 +136,18 @@ class SimConfig:
                 raise ConfigError(f"signals.types invalid for chan: {sorted(bad)}")
             if sig["donchian_n"] is not None:
                 raise ConfigError("signals.donchian_n must be null for chan")
+        elif sig["source"] == "ict":
+            from research.ict import params as ict_params
+
+            if sig["tf"] != "15m":
+                raise ConfigError("ict signals exist for 15m only")
+            if not sig["types"] or set(sig["types"]) - {"ict_long", "ict_short"}:
+                raise ConfigError("signals.types for ict must be a non-empty subset of ict_long / ict_short")
+            if sig["donchian_n"] is not None:
+                raise ConfigError("signals.donchian_n must be null for ict")
+            if "ict" not in sig:
+                raise ConfigError("missing key(s) in signals: ['ict']")
+            sig = {**sig, "ict": ict_params.validate(sig["ict"])}
         else:
             if sig["tf"] == "15m":
                 raise ConfigError("donchian signals exist for 1h, 4h and 1d only")
@@ -190,6 +205,15 @@ class SimConfig:
         for k in costs:
             _expect("costs", k, costs[k], "num")
         ex = resolve_exit(d["exit"])
+        if sig["source"] == "ict":
+            if ex["opposite_signal"]["enabled"]:
+                raise ConfigError("exit.opposite_signal is not available for ict signals")
+            if ex["tp1"]["enabled"] and ex["tp1"]["target"] != "r":
+                raise ConfigError("exit.tp1.target must be r for ict signals")
+            if ex["fixed_r"]["enabled"] and "row_target" in ex:
+                raise ConfigError("exit.fixed_r cannot be combined with exit.row_target")
+        elif "row_target" in ex:
+            raise ConfigError("exit.row_target exists for ict signals only")
         if "donchian_exit" in ex:
             if sig["source"] != "donchian":
                 raise ConfigError("exit.donchian_exit exists for donchian signals only")
@@ -225,12 +249,14 @@ class SimConfig:
 def resolve_exit(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ConfigError("exit must be a mapping")
-    allowed = set(EXIT_MODULES) | {"preset", "donchian_exit"}
+    allowed = set(EXIT_MODULES) | {"preset", "donchian_exit", "time_barrier", "row_target"}
     extra = set(raw) - allowed
     if extra:
         raise ConfigError(f"unknown key(s) in exit: {sorted(extra)}")
     raw = dict(raw)
     dcx = raw.pop("donchian_exit", None)  # phase 1b: kept out of EXIT_MODULES so that old shas do not change
+    tb = raw.pop("time_barrier", None)  # ict P1: kept out of EXIT_MODULES so that old shas do not change
+    rt = raw.pop("row_target", None)
     out = copy.deepcopy(EXIT_MODULES)
     preset = raw.get("preset")
     if preset is not None:
@@ -261,6 +287,23 @@ def resolve_exit(raw: dict) -> dict:
                 raise ConfigError("missing key(s) in exit.donchian_exit: ['n']")
             _expect("exit.donchian_exit", "n", dcx["n"], "int")
             out["donchian_exit"] = {"enabled": True, "n": dcx["n"]}
+    if tb is not None:
+        _check_keys("exit.time_barrier", tb, {"enabled", "bars", "min_r"}, {"enabled"})
+        _expect("exit.time_barrier", "enabled", tb["enabled"], "bool")
+        if tb["enabled"]:
+            for k in ("bars", "min_r"):
+                if k not in tb:
+                    raise ConfigError(f"missing key(s) in exit.time_barrier: ['{k}']")
+            _expect("exit.time_barrier", "bars", tb["bars"], "int")
+            _expect("exit.time_barrier", "min_r", tb["min_r"], "num")
+            if tb["bars"] < 1 or not tb["min_r"] > 0:
+                raise ConfigError("exit.time_barrier needs bars >= 1 and min_r > 0")
+            out["time_barrier"] = {"enabled": True, "bars": tb["bars"], "min_r": tb["min_r"]}
+    if rt is not None:
+        _check_keys("exit.row_target", rt, {"enabled"})
+        _expect("exit.row_target", "enabled", rt["enabled"], "bool")
+        if rt["enabled"]:
+            out["row_target"] = {"enabled": True}
     return out
 
 
@@ -354,6 +397,17 @@ DC_AUG_COLS = ("bias4_snap", "zs4_zg", "zs4_zd", "zs4_count")
 def load_signal_table(cfg: SimConfig, tf: str, source: str | None = None, aug: bool = False) -> pd.DataFrame:
     """Signal table; aug=True merges signals_{tf}_aug (atr15_pct, tp_up_end, tp_down_end) after asserting identical rows."""
     source = source or cfg.signals["source"]
+    if source == "ict":
+        from research.ict import params as IP
+
+        key = IP.table_key(cfg.signals["ict"])
+        p = C.CACHE / "ict" / f"events_{key}.parquet"
+        meta = p.with_suffix(".json")
+        if not p.exists() or not meta.exists():
+            raise FileNotFoundError(f"{p.name} missing (run python -m research.ict.generate build --exp …)")
+        if json.loads(meta.read_text())["params"] != IP.validate(cfg.signals["ict"]):
+            raise ValueError(f"{p.name}: sidecar params differ")
+        return pd.read_parquet(p)
     name = f"signals_{tf}.parquet" if source == "chan" else f"signals_donchian_{tf}.parquet"
     df = pd.read_parquet(C.CACHE / name)
     if aug and source == "chan":
@@ -615,6 +669,11 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
     use_opp = oppC["enabled"] or chan_exit
     opp_label = "channel_exit" if chan_exit else "opposite_signal"
     has_tp_cols = "tp_up_end" in sig.columns
+    tbC = ex.get("time_barrier")
+    rowC = ex.get("row_target")
+    track_amb = cfg.signals["source"] == "ict"
+    if track_amb:
+        cnt.update(amb_stop_target=0, amb_tp1_entry=0, row_target_invalid=0)
     for r in sig.itertuples(index=False):
         cnt["signals"] += 1
         side = int(r.side)
@@ -798,6 +857,11 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                 d_bar = bisect_left(ot, dl_points[k])
                 if d_bar >= n_bars or ot[d_bar] != dl_points[k]:
                     raise RuntimeError(f"{symbol}: delist bar {dl_points[k]} not found in the cached 15m bars")
+        amb1 = amb2 = tp2_done = False
+        tp2 = float(r.tp2) if rowC else math.nan
+        if rowC and not (tp2 == tp2 and side * (tp2 - entry_ref) > 0):
+            tp2 = math.nan
+            cnt["row_target_invalid"] += 1
         # ---- walk bars
         cur_stop = stop
         kind = "initial"
@@ -844,6 +908,11 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                 elif h_ >= cur_stop:
                     raw = cur_stop
             if raw is not None:
+                if track_amb:
+                    if tp_price is not None and not tp_done and ((l_ <= tp_price) if side == -1 else (h_ >= tp_price)):
+                        amb1 = True
+                    if tp2 == tp2 and ((l_ <= tp2) if side == -1 else (h_ >= tp2)):
+                        amb1 = True
                 p = raw * (1 - side * slip)
                 legs.append((rem, p, taker, ot[j], rem * raw * slip))
                 exit_bar, rem = j, 0.0
@@ -871,6 +940,14 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                         rem -= tp_frac
                         tp_done = True
                         hit = True
+                        if track_amb and ((h_ >= entry_ref) if side == -1 else (l_ <= entry_ref)):
+                            amb2 = True
+                if rowC and tp2 == tp2:
+                    raw2 = (o_ if o_ <= tp2 else (tp2 if l_ <= tp2 else None)) if side == -1 else (o_ if o_ >= tp2 else (tp2 if h_ >= tp2 else None))
+                    if raw2 is not None:
+                        legs.append((rem, raw2 * (1 - side * slip), taker, ot[j], rem * raw2 * slip))
+                        exit_bar, exit_reason, rem, tp2_done = j, "row_target", 0.0, True
+                        break
                 if not hit and fix_price is not None:
                     # a resting maker order at the target: filled only when price trades strictly through it, at the target price
                     if (side == 1 and h_ > fix_price) or (side == -1 and l_ < fix_price):
@@ -891,6 +968,8 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                 pending = "zhongshu_fail" if r.type in ("third_buy", "third_sell") else "swing_fail"
             elif timeC["enabled"] and (j - jf + 1) >= timeC["bars"]:
                 pending = "time_stop"
+            elif tbC is not None and not tp_done and (j - jf + 1) == tbC["bars"] and side * (best - entry_ref) < tbC["min_r"] * R:
+                pending = "time_barrier"
             else:
                 moved = False
                 if beC["enabled"]:
@@ -946,6 +1025,9 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
             fund, fmonths, symbol, side, R, ot[jf], ot[exit_bar], [x[3] for x in legs], [x[0] for x in legs], ot, O, Cl
         )
         att("filled", ot[exit_bar])
+        if track_amb:
+            cnt["amb_stop_target"] += amb1
+            cnt["amb_tp1_entry"] += amb2
         rows.append(
             (
                 r.signal_id,
@@ -978,6 +1060,7 @@ def simulate_symbol(cfg: SimConfig, symbol: str, sig: pd.DataFrame, mk: dict, bi
                 n_imp,
                 n_mkt,
             )
+            + ((amb1, amb2, tp2_done) if track_amb else ())
         )
     return rows, cnt
 
@@ -988,6 +1071,7 @@ _COLS = [
     "bars_held", "exit_reason", "tp1_hit",
     "attempt_id", "funding_r", "net_r_ex_funding", "n_funding", "funding_missing", "slip_r", "n_funding_imputed", "n_funding_market",
 ]
+_ICT_COLS = ["amb_stop_target", "amb_tp1_entry", "tp2_hit"]
 _ATT_COLS = ["attempt_id", "signal_id", "symbol", "tf", "type", "side", "signal_time", "status", "end_time"]
 _G: dict = {}
 
@@ -1046,7 +1130,7 @@ def simulate(cfg: SimConfig, market: Market, signals: pd.DataFrame, workers: int
     else:
         for n in names:
             merge(_work(n))
-    df = pd.DataFrame(rows, columns=_COLS)
+    df = pd.DataFrame(rows, columns=_COLS + _ICT_COLS if cfg.signals["source"] == "ict" else _COLS)
     if len(df):
         for c in ("signal_time",):
             df[c] = pd.to_datetime(df[c], utc=True).astype("datetime64[us, UTC]")

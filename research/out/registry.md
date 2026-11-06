@@ -41,3 +41,26 @@
 | 2026-11-04T21:27:47Z | p1b_tr_4h_n20__nb_dcn_24 | 2be186a92d70 | NEIGHBOR of p1b_tr_4h_n20: signals.donchian_n=24 (exit n=12); src=donchian tf=4h n=24 types=2 filt=top20,delist entry=market stop=2.0atr exit=dcx12 |
 | 2026-11-04T21:27:58Z | p1b_tr_4h_n20__nb_stop_1p6 | ca20254e5a4a | NEIGHBOR of p1b_tr_4h_n20: stop.buffer_atr=1.6; src=donchian tf=4h n=20 types=2 filt=top20,delist entry=market stop=1.6atr exit=dcx10 |
 | 2026-11-04T21:28:09Z | p1b_tr_4h_n20__nb_stop_2p4 | 1c4c6531f594 | NEIGHBOR of p1b_tr_4h_n20: stop.buffer_atr=2.4; src=donchian tf=4h n=20 types=2 filt=top20,delist entry=market stop=2.4atr exit=dcx10 |
+| 2026-11-05T09:58:37Z | ict_L7 | d8fc9b18efb4 | src=ict tf=15m ict=6d0207d0a4ab types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T09:58:47Z | ict_L7__nb_fvgk_0p4 | e1710cdb7e2c | NEIGHBOR of ict_L7: signals.ict.fvg_k = 0.4; src=ict tf=15m ict=d4af11819dfb types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T09:58:56Z | ict_L7__nb_fvgk_0p6 | 3ff4f58a27b6 | NEIGHBOR of ict_L7: signals.ict.fvg_k = 0.6; src=ict tf=15m ict=a9e0db7c3102 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T09:59:05Z | ict_L7__nb_sl_0p2 | b57754710dad | NEIGHBOR of ict_L7: stop.buffer_atr = 0.2; src=ict tf=15m ict=6d0207d0a4ab types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.2atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T09:59:15Z | ict_L7__nb_sl_0p4 | 0eae32793d63 | NEIGHBOR of ict_L7: stop.buffer_atr = 0.4; src=ict tf=15m ict=6d0207d0a4ab types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.4atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T09:59:31Z | ict_L0 | 6fbc5c3e5053 | src=ict tf=15m ict=5e2aa89112ea types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T09:59:41Z | ict_L1 | f69787b0090e | src=ict tf=15m ict=b37bb2285ef5 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T09:59:50Z | ict_L2 | 35ba81b93db7 | src=ict tf=15m ict=d3e4046bf36b types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:00:00Z | ict_L3 | 67a16c309bd2 | src=ict tf=15m ict=c8b98316bce2 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:00:09Z | ict_L4 | b3640d657ce4 | src=ict tf=15m ict=a8bf084c3d9f types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:00:18Z | ict_L5 | ea1a84a5e015 | src=ict tf=15m ict=b9d5bccf9acf types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:00:28Z | ict_L6 | abb0791a673d | src=ict tf=15m ict=c501a360c1f3 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:00:37Z | ict_loo_htf | b0e6693f8b4d | src=ict tf=15m ict=7eee369b722b types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:00:46Z | ict_loo_exp | 5ccd18c3a1d4 | src=ict tf=15m ict=9deee388b403 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:00:55Z | ict_loo_fresh | 1e16c0fa4c0d | src=ict tf=15m ict=c1f5ddec3a5a types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:01:05Z | ict_loo_ltf | 6a4c68427ca5 | src=ict tf=15m ict=4bb021f5ce07 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:01:13Z | ict_loo_sweep | e85391c99f98 | src=ict tf=15m ict=a583777b5d2a types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:01:23Z | ict_loo_session | 5dee7a0b40f9 | src=ict tf=15m ict=4a49538c99f4 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:01:32Z | ict_x_trail | 2bc00cb8a8af | src=ict tf=15m ict=6d0207d0a4ab types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+ratchet+tb12 |
+| 2026-11-05T10:01:41Z | ict_x_notb | 3f1bf96f931c | src=ict tf=15m ict=6d0207d0a4ab types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tp2 |
+| 2026-11-05T10:01:51Z | ict_rand | b0bf0d3d8d42 | src=ict tf=15m ict=ed41c02be32d types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:02:00Z | ict_anchor_conf | e6539dba6c50 | src=ict tf=15m ict=c1c823abf55d types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |
+| 2026-11-05T10:02:09Z | ict_setup15m | f04f8cb92a04 | src=ict tf=15m ict=17ba5468ac95 types=2 filt=top20,cost<=0.40,xtf,delist entry=market stop=0.3atr exit=tp1+breakeven+tb12+tp2 |

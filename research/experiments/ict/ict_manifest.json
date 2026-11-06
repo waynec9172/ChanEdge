@@ -1,0 +1,184 @@
+{
+  "plan": "research/plans/ict_phase1.md",
+  "ict_version": "ict-p1.0",
+  "run": [
+    {
+      "name": "ict_L0",
+      "kind": "ladder",
+      "table_key": "5e2aa89112ea",
+      "config_sha": "6fbc5c3e5053"
+    },
+    {
+      "name": "ict_L1",
+      "kind": "ladder",
+      "table_key": "b37bb2285ef5",
+      "config_sha": "f69787b0090e"
+    },
+    {
+      "name": "ict_L2",
+      "kind": "ladder",
+      "table_key": "d3e4046bf36b",
+      "config_sha": "35ba81b93db7"
+    },
+    {
+      "name": "ict_L3",
+      "kind": "ladder",
+      "table_key": "c8b98316bce2",
+      "config_sha": "67a16c309bd2"
+    },
+    {
+      "name": "ict_L4",
+      "kind": "ladder",
+      "table_key": "a8bf084c3d9f",
+      "config_sha": "b3640d657ce4"
+    },
+    {
+      "name": "ict_L5",
+      "kind": "ladder",
+      "table_key": "b9d5bccf9acf",
+      "config_sha": "ea1a84a5e015"
+    },
+    {
+      "name": "ict_L6",
+      "kind": "ladder",
+      "table_key": "c501a360c1f3",
+      "config_sha": "abb0791a673d"
+    },
+    {
+      "name": "ict_L7",
+      "kind": "ladder",
+      "table_key": "6d0207d0a4ab",
+      "config_sha": "d8fc9b18efb4"
+    },
+    {
+      "name": "ict_loo_htf",
+      "kind": "loo",
+      "table_key": "7eee369b722b",
+      "config_sha": "b0e6693f8b4d"
+    },
+    {
+      "name": "ict_loo_exp",
+      "kind": "loo",
+      "table_key": "9deee388b403",
+      "config_sha": "5ccd18c3a1d4"
+    },
+    {
+      "name": "ict_loo_fresh",
+      "kind": "loo",
+      "table_key": "c1f5ddec3a5a",
+      "config_sha": "1e16c0fa4c0d"
+    },
+    {
+      "name": "ict_loo_ltf",
+      "kind": "loo",
+      "table_key": "4bb021f5ce07",
+      "config_sha": "6a4c68427ca5"
+    },
+    {
+      "name": "ict_loo_sweep",
+      "kind": "loo",
+      "table_key": "a583777b5d2a",
+      "config_sha": "e85391c99f98"
+    },
+    {
+      "name": "ict_loo_session",
+      "kind": "loo",
+      "table_key": "4a49538c99f4",
+      "config_sha": "5dee7a0b40f9"
+    },
+    {
+      "name": "ict_x_trail",
+      "kind": "exit",
+      "table_key": "6d0207d0a4ab",
+      "config_sha": "2bc00cb8a8af"
+    },
+    {
+      "name": "ict_x_notb",
+      "kind": "exit",
+      "table_key": "6d0207d0a4ab",
+      "config_sha": "3f1bf96f931c"
+    },
+    {
+      "name": "ict_rand",
+      "kind": "random",
+      "table_key": "ed41c02be32d",
+      "config_sha": "b0bf0d3d8d42"
+    },
+    {
+      "name": "ict_anchor_conf",
+      "kind": "variant",
+      "table_key": "c1c823abf55d",
+      "config_sha": "e6539dba6c50"
+    },
+    {
+      "name": "ict_setup15m",
+      "kind": "variant",
+      "table_key": "17ba5468ac95",
+      "config_sha": "f04f8cb92a04"
+    }
+  ],
+  "neighbors": {
+    "ict_L7": [
+      {
+        "name": "ict_L7__nb_fvgk_0p4",
+        "kind": "neighbor",
+        "table_key": "d4af11819dfb",
+        "config_sha": "e1710cdb7e2c"
+      },
+      {
+        "name": "ict_L7__nb_fvgk_0p6",
+        "kind": "neighbor",
+        "table_key": "a9e0db7c3102",
+        "config_sha": "3ff4f58a27b6"
+      },
+      {
+        "name": "ict_L7__nb_sl_0p2",
+        "kind": "neighbor",
+        "table_key": "6d0207d0a4ab",
+        "config_sha": "b57754710dad"
+      },
+      {
+        "name": "ict_L7__nb_sl_0p4",
+        "kind": "neighbor",
+        "table_key": "6d0207d0a4ab",
+        "config_sha": "0eae32793d63"
+      }
+    ]
+  },
+  "reserved": [
+    "ict_rsv1",
+    "ict_rsv2",
+    "ict_rsv3",
+    "ict_rsv4",
+    "ict_rsv5"
+  ],
+  "order": {
+    "S1": [
+      "ict_L7",
+      "ict_L7__nb_fvgk_0p4",
+      "ict_L7__nb_fvgk_0p6",
+      "ict_L7__nb_sl_0p2",
+      "ict_L7__nb_sl_0p4"
+    ],
+    "S2": [
+      "ict_L0",
+      "ict_L1",
+      "ict_L2",
+      "ict_L3",
+      "ict_L4",
+      "ict_L5",
+      "ict_L6",
+      "ict_loo_htf",
+      "ict_loo_exp",
+      "ict_loo_fresh",
+      "ict_loo_ltf",
+      "ict_loo_sweep",
+      "ict_loo_session",
+      "ict_x_trail",
+      "ict_x_notb",
+      "ict_rand",
+      "ict_anchor_conf",
+      "ict_setup15m"
+    ]
+  }
+}

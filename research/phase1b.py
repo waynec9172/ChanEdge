@@ -36,6 +36,25 @@ from research import sim
 MANIFEST = C.EXPERIMENTS / "p1b_manifest.json"
 NB_DIR = C.EXPERIMENTS / "neighbors"
 P1_MANIFEST = C.EXPERIMENTS / "p1_manifest.json"
+ICT_DIR = C.EXPERIMENTS / "ict"
+ICT_NB_DIR = ICT_DIR / "neighbors"
+ICT_MANIFEST = ICT_DIR / "ict_manifest.json"
+
+
+def ict_manifest_names() -> set:
+    """Names allowed by the ICT manifest (registered mains + their registered neighbours); empty if there is no manifest."""
+    if not ICT_MANIFEST.exists():
+        return set()
+    m = json.loads(ICT_MANIFEST.read_text())
+    return {r["name"] for r in m.get("run", [])} | {r["name"] for rows in m.get("neighbors", {}).values() for r in rows}
+
+
+def yaml_path(name: str) -> Path:
+    """Where the YAML of a registered name lives (old experiments, or the ICT directories for ict_* names)."""
+    nb = R.NB_MARK in name
+    if name.startswith("ict_"):
+        return (ICT_NB_DIR if nb else ICT_DIR) / f"{name}.yaml"
+    return (NB_DIR if nb else C.EXPERIMENTS) / f"{name}.yaml"
 BASE_FILTERS = {"in_top20": True, "candidate_only": False, "gate_pass": False, "jev_min": None, "max_cost_r": None, "exclude_reemit": False}
 COSTS = {"taker_bps": 5, "maker_bps": 2, "slippage_bps": 1}
 NB_STOPS = (1.6, 2.4)
@@ -534,7 +553,7 @@ def audit() -> int:
     main_names = [n for n in reg if R.NB_MARK not in n]
     nb_names = [n for n in reg if R.NB_MARK in n]
     for n in reg:
-        p = (NB_DIR if R.NB_MARK in n else C.EXPERIMENTS) / f"{n}.yaml"
+        p = yaml_path(n)
         if not p.exists():
             problems.append(f"{n}: no YAML at {p.relative_to(C.ROOT)}")
             continue
@@ -558,7 +577,7 @@ def audit() -> int:
     if len(main_names) > R.MAX_EXPERIMENTS:
         problems.append(f"{len(main_names)} main experiments > {R.MAX_EXPERIMENTS}")
     p1m = json.loads(P1_MANIFEST.read_text())
-    allowed = {r["name"] for rnd in ("S1", "S2", "S3") for r in p1m.get(rnd, [])} | {r["name"] for r in load_manifest().get("run", [])} | {n for n in reg if n.startswith("p0_")}
+    allowed = {r["name"] for rnd in ("S1", "S2", "S3") for r in p1m.get(rnd, [])} | {r["name"] for r in load_manifest().get("run", [])} | {n for n in reg if n.startswith("p0_")} | ict_manifest_names()
     for n in main_names:
         if n not in allowed:
             problems.append(f"{n}: not in the manifest lists")
@@ -566,7 +585,10 @@ def audit() -> int:
         problems.append("oos_log.md is not empty")
     for p in problems:
         print("PROBLEM", p)
-    print(f"{'OK' if not problems else 'FAIL'}: main experiments {len(main_names)}, neighbours {len(nb_names)}")
+    ict_main = [n for n in main_names if n.startswith("ict_")]
+    ict_nb = [n for n in nb_names if n.startswith("ict_")]
+    tail = f" | ICT: main {len(ict_main)}, neighbours {len(ict_nb)}" if (ict_main or ict_nb) else ""
+    print(f"{'OK' if not problems else 'FAIL'}: main experiments {len(main_names) - len(ict_main)}, neighbours {len(nb_names) - len(ict_nb)}{tail}")
     return 0 if not problems else 1
 
 
